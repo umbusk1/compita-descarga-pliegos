@@ -19,5 +19,5 @@ EXPOSE 8080
 # Variable de entorno para el puerto
 ENV PORT=8080
 
-# Comando de inicio
-CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8080"]
+# Comando de inicio con timeout de 300 segundos (5 minutos)
+CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8080", "--timeout", "300", "--workers", "1"]
