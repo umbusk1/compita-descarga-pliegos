@@ -14,7 +14,7 @@ def descargar_pliego(referencia):
     """
     Esta función:
     1. Va al portal SECP
-    2. Busca la licitación por su referencia
+    2. Usa el buscador para encontrar la licitación
     3. Hace clic en DETALLE
     4. Hace clic en Descargar procedimiento
     5. Extrae el pliego del ZIP
@@ -40,36 +40,52 @@ def descargar_pliego(referencia):
             page.goto(url_listado, timeout=60000)
             page.wait_for_timeout(3000)
             
-            # 2. Buscar la fila que contiene la referencia
-            print(f"📋 Buscando en la tabla...")
+            print(f"📋 Usando el buscador del portal...")
             
-            # Buscar el texto de la referencia en la tabla
-            fila_referencia = page.locator(f"text={referencia}").first
+            # 2. Encontrar el campo de búsqueda
+            # El campo está bajo el texto "Buscar Proceso de Compra"
+            campo_busqueda = page.locator('input[type="text"]').first
             
-            if not fila_referencia.is_visible():
-                raise Exception(f"No se encontró la licitación {referencia}")
+            # 3. Escribir la referencia en el campo
+            campo_busqueda.fill(referencia)
+            print(f"✍️ Referencia ingresada: {referencia}")
             
-            print(f"✅ Licitación encontrada")
+            # 4. Hacer clic en el botón "Buscar"
+            boton_buscar = page.locator('button:has-text("Buscar")').first
+            boton_buscar.click()
             
-            # 3. Hacer clic en el botón DETALLE de esa fila
-            # El botón DETALLE está en la misma fila
-            fila = fila_referencia.locator('xpath=ancestor::tr')
+            print(f"⏳ Esperando resultados de búsqueda...")
+            
+            # 5. Esperar a que se actualice la tabla (dar tiempo para que cargue)
+            page.wait_for_timeout(3000)
+            
+            # 6. Verificar que hay resultados
+            # Buscar la referencia en la tabla filtrada
+            resultado = page.locator(f'text="{referencia}"').first
+            
+            if not resultado.is_visible(timeout=5000):
+                raise Exception(f"No se encontró la licitación {referencia} después de buscar")
+            
+            print(f"✅ Licitación encontrada en resultados")
+            
+            # 7. Hacer clic en el botón DETALLE
+            # El botón DETALLE está en la misma fila que la referencia
+            fila = resultado.locator('xpath=ancestor::tr')
             boton_detalle = fila.locator('button:has-text("DETALLE")').first
             
             print(f"🖱️ Haciendo clic en DETALLE...")
             boton_detalle.click()
             
-            # 4. Esperar a que se abra el modal
+            # 8. Esperar a que se abra el modal
             page.wait_for_timeout(2000)
             
             # Verificar que el modal está visible
-            modal = page.locator('.modal-content').first
-            if not modal.is_visible():
-                raise Exception("El modal no se abrió correctamente")
+            modal = page.locator('.modal-content, .modal-dialog').first
+            modal.wait_for(state='visible', timeout=10000)
             
             print(f"✅ Modal abierto")
             
-            # 5. Hacer clic en "Descargar procedimiento"
+            # 9. Hacer clic en "Descargar procedimiento"
             print(f"⬇️ Descargando procedimiento...")
             
             # Configurar la descarga
@@ -79,20 +95,20 @@ def descargar_pliego(referencia):
             
             download = download_info.value
             
-            # 6. Guardar el ZIP
+            # 10. Guardar el ZIP
             zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
             download.save_as(zip_path)
             
             print(f"💾 ZIP descargado: {zip_path}")
             
-            # 7. Descomprimir
+            # 11. Descomprimir
             extract_path = f"{TEMP_DIR}/{nombre_seguro}"
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
             
             print(f"📦 ZIP descomprimido")
             
-            # 8. Buscar el archivo "pliego" en 1_Publicaciones/Adjuntos
+            # 12. Buscar el archivo "pliego" en 1_Publicaciones/Adjuntos
             pliego_path = None
             adjuntos_path = f"{extract_path}/1_Publicaciones/Adjuntos"
             
