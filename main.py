@@ -3,70 +3,130 @@ from playwright.sync_api import sync_playwright
 import os
 import zipfile
 import time
+import re
 
 app = Flask(__name__)
 
 # Ruta donde se guardarán los archivos temporales
 TEMP_DIR = "/tmp/descargas"
 
-# Función para descargar el pliego
-def descargar_pliego(licitacion_id, url_detalle):
+def descargar_pliego(referencia):
     """
     Esta función:
-    1. Abre un navegador invisible
-    2. Va a la URL de la licitación
-    3. Descarga el ZIP
-    4. Busca el archivo "pliego"
-    5. Lo devuelve
+    1. Va al portal SECP
+    2. Busca la licitación por su referencia
+    3. Hace clic en DETALLE
+    4. Hace clic en Descargar procedimiento
+    5. Extrae el pliego del ZIP
     """
     
     # Crear carpeta temporal si no existe
     os.makedirs(TEMP_DIR, exist_ok=True)
     
+    # Limpiar nombre de archivo (quitar caracteres especiales)
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+    
     with sync_playwright() as p:
         # Abrir navegador Chrome invisible
         browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+        context = browser.new_context()
+        page = context.new_page()
         
         try:
-            # Ir a la página de la licitación
-            page.goto(url_detalle, timeout=30000)
+            print(f"🔍 Buscando licitación: {referencia}")
             
-            # Esperar que cargue la página
+            # 1. Ir a la página del listado
+            url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
+            page.goto(url_listado, timeout=60000)
+            page.wait_for_timeout(3000)
+            
+            # 2. Buscar la fila que contiene la referencia
+            print(f"📋 Buscando en la tabla...")
+            
+            # Buscar el texto de la referencia en la tabla
+            fila_referencia = page.locator(f"text={referencia}").first
+            
+            if not fila_referencia.is_visible():
+                raise Exception(f"No se encontró la licitación {referencia}")
+            
+            print(f"✅ Licitación encontrada")
+            
+            # 3. Hacer clic en el botón DETALLE de esa fila
+            # El botón DETALLE está en la misma fila
+            fila = fila_referencia.locator('xpath=ancestor::tr')
+            boton_detalle = fila.locator('button:has-text("DETALLE")').first
+            
+            print(f"🖱️ Haciendo clic en DETALLE...")
+            boton_detalle.click()
+            
+            # 4. Esperar a que se abra el modal
             page.wait_for_timeout(2000)
             
-            # Buscar el botón "Descargar procedimiento"
-            # (Aquí ajustaremos el selector según el HTML real)
-            descarga_button = page.locator('text="Descargar procedimiento"')
+            # Verificar que el modal está visible
+            modal = page.locator('.modal-content').first
+            if not modal.is_visible():
+                raise Exception("El modal no se abrió correctamente")
+            
+            print(f"✅ Modal abierto")
+            
+            # 5. Hacer clic en "Descargar procedimiento"
+            print(f"⬇️ Descargando procedimiento...")
             
             # Configurar la descarga
-            with page.expect_download() as download_info:
-                descarga_button.click()
+            with page.expect_download(timeout=60000) as download_info:
+                boton_descargar = page.locator('button:has-text("Descargar procedimiento")').first
+                boton_descargar.click()
             
             download = download_info.value
             
-            # Guardar el ZIP
-            zip_path = f"{TEMP_DIR}/{licitacion_id}.zip"
+            # 6. Guardar el ZIP
+            zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
             download.save_as(zip_path)
             
-            # Descomprimir
-            extract_path = f"{TEMP_DIR}/{licitacion_id}"
+            print(f"💾 ZIP descargado: {zip_path}")
+            
+            # 7. Descomprimir
+            extract_path = f"{TEMP_DIR}/{nombre_seguro}"
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(extract_path)
             
-            # Buscar el archivo "pliego"
+            print(f"📦 ZIP descomprimido")
+            
+            # 8. Buscar el archivo "pliego" en 1_Publicaciones/Adjuntos
             pliego_path = None
             adjuntos_path = f"{extract_path}/1_Publicaciones/Adjuntos"
             
             if os.path.exists(adjuntos_path):
-                for file in os.listdir(adjuntos_path):
+                print(f"📂 Buscando pliego en: {adjuntos_path}")
+                archivos = os.listdir(adjuntos_path)
+                print(f"   Archivos encontrados: {archivos}")
+                
+                for file in archivos:
                     if "pliego" in file.lower():
                         pliego_path = os.path.join(adjuntos_path, file)
+                        print(f"📄 Pliego encontrado: {file}")
                         break
+                
+                if not pliego_path:
+                    # Si no encontró "pliego", listar todos los archivos
+                    print(f"⚠️ No se encontró archivo con 'pliego' en el nombre")
+                    print(f"   Archivos disponibles: {archivos}")
+            else:
+                print(f"❌ No existe la carpeta: {adjuntos_path}")
+                
+                # Listar lo que sí existe
+                print(f"📂 Estructura del ZIP:")
+                for root, dirs, files in os.walk(extract_path):
+                    level = root.replace(extract_path, '').count(os.sep)
+                    indent = ' ' * 2 * level
+                    print(f"{indent}{os.path.basename(root)}/")
+                    subindent = ' ' * 2 * (level + 1)
+                    for file in files:
+                        print(f"{subindent}{file}")
             
             browser.close()
             
-            return pliego_path
+            return pliego_path, nombre_seguro
             
         except Exception as e:
             browser.close()
@@ -77,26 +137,31 @@ def descargar_pliego(licitacion_id, url_detalle):
 def descargar_pliego_endpoint():
     """
     Este endpoint recibe:
-    - licitacion_id: El ID de la licitación
-    - url_detalle: La URL del detalle en el portal SECP
+    - referencia: La referencia de la licitación (ej: SRSEN-DAF-CM-2026-0002)
     
     Y devuelve el archivo pliego
     """
     
     data = request.json
-    licitacion_id = data.get('licitacion_id')
-    url_detalle = data.get('url_detalle')
+    referencia = data.get('referencia')
     
-    if not licitacion_id or not url_detalle:
-        return jsonify({"error": "Faltan parámetros"}), 400
+    if not referencia:
+        return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
     
     try:
-        pliego_path = descargar_pliego(licitacion_id, url_detalle)
+        pliego_path, nombre_seguro = descargar_pliego(referencia)
         
         if pliego_path and os.path.exists(pliego_path):
-            return send_file(pliego_path, as_attachment=True)
+            return send_file(
+                pliego_path, 
+                as_attachment=True,
+                download_name=f"pliego_{nombre_seguro}.pdf"
+            )
         else:
-            return jsonify({"error": "No se encontró el pliego"}), 404
+            return jsonify({
+                "error": "No se encontró el pliego",
+                "mensaje": "Revisa los logs en Railway para ver la estructura del ZIP"
+            }), 404
             
     except Exception as e:
         return jsonify({"error": str(e)}), 500
