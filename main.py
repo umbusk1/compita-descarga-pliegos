@@ -30,6 +30,7 @@ def descargar_pliego(referencia):
         # Abrir navegador Chrome invisible
         browser = p.chromium.launch(headless=True)
         context = browser.new_context()
+        context.set_default_timeout(120000)  # 2 minutos para todas las operaciones
         page = context.new_page()
         
         try:
@@ -37,8 +38,8 @@ def descargar_pliego(referencia):
             
             # 1. Ir a la página del listado
             url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
-            page.goto(url_listado, timeout=60000)
-            page.wait_for_timeout(3000)
+            page.goto(url_listado, timeout=90000)
+            page.wait_for_timeout(5000)
             
             print(f"📋 Usando el buscador del portal...")
             
@@ -57,13 +58,13 @@ def descargar_pliego(referencia):
             print(f"⏳ Esperando resultados de búsqueda...")
             
             # 5. Esperar a que se actualice la tabla (dar tiempo para que cargue)
-            page.wait_for_timeout(3000)
+            page.wait_for_timeout(5000)
             
             # 6. Verificar que hay resultados
             # Buscar la referencia en la tabla filtrada
             resultado = page.locator(f'text="{referencia}"').first
             
-            if not resultado.is_visible(timeout=5000):
+            if not resultado.is_visible(timeout=15000):
                 raise Exception(f"No se encontró la licitación {referencia} después de buscar")
             
             print(f"✅ Licitación encontrada en resultados")
@@ -77,11 +78,11 @@ def descargar_pliego(referencia):
             boton_detalle.click()
             
             # 8. Esperar a que se abra el modal
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(3000)
             
             # Verificar que el modal está visible
             modal = page.locator('.modal-content, .modal-dialog').first
-            modal.wait_for(state='visible', timeout=10000)
+            modal.wait_for(state='visible', timeout=15000)
             
             print(f"✅ Modal abierto")
             
@@ -89,7 +90,7 @@ def descargar_pliego(referencia):
             print(f"⬇️ Descargando procedimiento...")
             
             # Configurar la descarga
-            with page.expect_download(timeout=60000) as download_info:
+            with page.expect_download(timeout=90000) as download_info:
                 boton_descargar = page.locator('button:has-text("Descargar procedimiento")').first
                 boton_descargar.click()
             
