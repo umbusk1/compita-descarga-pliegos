@@ -147,34 +147,57 @@ def descargar_pliego(referencia):
             
             print(f"✅ Licitación encontrada en la tabla")
             
+            # DEBUG: Captura de pantalla
+            screenshot_path = f"{TEMP_DIR}/debug_tabla.png"
+            page.screenshot(path=screenshot_path)
+            print(f"📸 Captura guardada en: {screenshot_path}")
+            
             # 6. Hacer clic en DETALLE
             print(f"🖱️ Buscando botón DETALLE...")
             
             # Encontrar la fila (tr) que contiene el resultado
             fila = resultado.locator('xpath=ancestor::tr')
             
+            # DEBUG: Mostrar el HTML de la fila
+            try:
+                html_fila = fila.inner_html()
+                print(f"📋 HTML de la fila:")
+                print(html_fila[:500])  # Primeros 500 caracteres
+            except:
+                pass
+            
             # Buscar el botón/link DETALLE en esa fila
-            # Probar múltiples selectores hasta encontrar uno que funcione
+            # Basado en el HTML real: <a title="Detalle" href="javascript:void(0);">Detalle</a>
             boton_detalle = None
             selectores_detalle = [
+                # Por atributo title (MÁS CONFIABLE)
+                'a[title="Detalle"]',
+                # Por parte del ID que es consistente
+                'a[id*="lnkDetailLink"]',
+                # Por XPath con title
+                'xpath=.//a[@title="Detalle"]',
+                # Por XPath con texto exacto
+                'xpath=.//a[text()="Detalle"]',
+                # Por href específico
+                'a[href="javascript:void(0)"]',
+                # Fallbacks originales
                 'a:has-text("Detalle")',
-                'a:has-text("DETALLE")',
-                'a:text-matches("etalle", "i")',
-                'button:has-text("DETALLE")',
-                'button:has-text("Detalle")'
+                '*:has-text("Detalle")'
             ]
             
             for i, selector in enumerate(selectores_detalle):
                 try:
                     print(f"   Probando selector {i+1}: {selector}")
                     boton = fila.locator(selector).first
-                    # Verificar si está visible con timeout corto
-                    if boton.is_visible(timeout=3000):
+                    # Usar count() en lugar de is_visible() para evitar timeouts
+                    if boton.count() > 0:
                         boton_detalle = boton
                         print(f"   ✅ Selector {i+1} funcionó")
                         break
+                    else:
+                        print(f"   ❌ Selector {i+1} no encontró elementos")
                 except Exception as e:
-                    print(f"   ❌ Selector {i+1} falló")
+                    print(f"   ❌ Selector {i+1} dio error: {str(e)[:50]}")
                     continue
             
             if not boton_detalle:
