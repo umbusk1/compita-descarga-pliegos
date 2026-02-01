@@ -154,23 +154,40 @@ def descargar_pliego(referencia):
             fila = resultado.locator('xpath=ancestor::tr')
             
             # Buscar el botón/link DETALLE en esa fila
+            # Probar múltiples selectores hasta encontrar uno que funcione
             boton_detalle = None
-            try:
-                boton_detalle = fila.locator('a:has-text("Detalle")').first
-            except:
+            selectores_detalle = [
+                'a:has-text("Detalle")',
+                'a:has-text("DETALLE")',
+                'a:text-matches("etalle", "i")',
+                'button:has-text("DETALLE")',
+                'button:has-text("Detalle")'
+            ]
+            
+            for i, selector in enumerate(selectores_detalle):
                 try:
-                    boton_detalle = fila.locator('a:has-text("DETALLE")').first
-                except:
-                    boton_detalle = fila.locator('a:text-matches("etalle", "i")').first
+                    print(f"   Probando selector {i+1}: {selector}")
+                    boton = fila.locator(selector).first
+                    # Verificar si está visible con timeout corto
+                    if boton.is_visible(timeout=3000):
+                        boton_detalle = boton
+                        print(f"   ✅ Selector {i+1} funcionó")
+                        break
+                except Exception as e:
+                    print(f"   ❌ Selector {i+1} falló")
+                    continue
             
             if not boton_detalle:
-                raise Exception("No se encontró el botón DETALLE")
+                raise Exception("No se encontró el botón DETALLE con ningún selector")
             
             # Scroll y clic
+            print(f"🖱️ Haciendo scroll al botón...")
             boton_detalle.scroll_into_view_if_needed()
             page.wait_for_timeout(2000)
+            
+            print(f"🖱️ Haciendo clic en DETALLE...")
             boton_detalle.click()
-            print(f"✅ Clic en DETALLE")
+            print(f"✅ Clic en DETALLE realizado")
             
             # 7. Esperar que se abra el modal o nueva ventana
             page.wait_for_timeout(5000)
