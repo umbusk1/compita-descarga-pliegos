@@ -12,191 +12,318 @@ TEMP_DIR = "/tmp/descargas"
 
 def descargar_pliego(referencia):
     """
-    Esta función:
-    1. Va al portal SECP
-    2. Usa el buscador para encontrar la licitación
-    3. Hace clic en DETALLE
-    4. Hace clic en Descargar procedimiento
-    5. Extrae el pliego del ZIP
+    Descarga el pliego usando la MISMA lógica que funcionó en Selenium
     """
     
     # Crear carpeta temporal si no existe
     os.makedirs(TEMP_DIR, exist_ok=True)
     
-    # Limpiar nombre de archivo (quitar caracteres especiales)
+    # Limpiar nombre de archivo
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
     
     with sync_playwright() as p:
         # Abrir navegador Chrome invisible
         browser = p.chromium.launch(headless=True)
         context = browser.new_context()
-        context.set_default_timeout(120000)  # 2 minutos para todas las operaciones
+        context.set_default_timeout(120000)  # 2 minutos
         page = context.new_page()
         
         try:
             print(f"🔍 Buscando licitación: {referencia}")
             
-            # 1. Ir a la página del listado
+            # 1. Navegar al portal
+            print(f"📋 Navegando al portal...")
             url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
             page.goto(url_listado, timeout=90000)
             page.wait_for_timeout(5000)
+            print(f"✅ Portal cargado")
             
-            print(f"📋 Usando el buscador del portal...")
-            
-            # 2. Encontrar el campo de búsqueda
-            # El campo está bajo el texto "Buscar Proceso de Compra"
-            campo_busqueda = page.locator('input[type="text"]').first
+            # 2. Usar el buscador - CON ID ESPECÍFICO
+            print(f"✍️ Escribiendo en el buscador...")
+            campo_busqueda = page.locator('#txtAllWords2Search')
             campo_busqueda.wait_for(state='visible', timeout=10000)
-            
-            # 3. Escribir la referencia en el campo
+            campo_busqueda.clear()
             campo_busqueda.fill(referencia)
-            print(f"✍️ Referencia ingresada: {referencia}")
+            print(f"✅ Referencia ingresada: {referencia}")
             
-            # Esperar un poco después de escribir
-            page.wait_for_timeout(1000)
+            # 3. Hacer clic en el BOTÓN AZUL (input type="button" value="Buscar")
+            print(f"🔎 Buscando el botón azul 'Buscar'...")
             
-            # 4. Hacer clic en el botón "Buscar"
-            # Ser más específico: buscar el botón cerca del input
-            print(f"🔎 Buscando el botón Buscar...")
-            boton_buscar = page.get_by_role("button", name="Buscar").first
-            boton_buscar.wait_for(state='visible', timeout=10000)
-            print(f"✅ Botón Buscar encontrado")
+            # Intentar múltiples selectores (como en el código original)
+            boton_encontrado = False
             
-            boton_buscar.click()
-            print(f"✅ Clic en Buscar realizado")
+            # Opción 1: Input type=button con value=Buscar
+            try:
+                boton_buscar = page.locator('input[type="button"][value="Buscar"]').first
+                if boton_buscar.is_visible(timeout=5000):
+                    boton_buscar.click()
+                    boton_encontrado = True
+                    print(f"✅ Clic en botón azul (Opción 1)")
+            except:
+                pass
             
-            print(f"⏳ Esperando resultados de búsqueda...")
+            # Opción 2: Cualquier input con value=Buscar
+            if not boton_encontrado:
+                try:
+                    boton_buscar = page.locator('input[value="Buscar"]').first
+                    if boton_buscar.is_visible(timeout=5000):
+                        boton_buscar.click()
+                        boton_encontrado = True
+                        print(f"✅ Clic en botón (Opción 2)")
+                except:
+                    pass
             
-            # 5. Esperar a que se actualice la tabla (dar tiempo para que cargue)
-            page.wait_for_timeout(5000)
+            # Opción 3: Presionar ENTER en el campo
+            if not boton_encontrado:
+                try:
+                    campo_busqueda.press('Enter')
+                    boton_encontrado = True
+                    print(f"✅ Enter en campo de búsqueda (Opción 3)")
+                except:
+                    pass
             
-            # 6. Verificar que hay resultados
-            # Buscar la referencia en la tabla filtrada
-            print(f"🔍 Buscando {referencia} en los resultados...")
-            resultado = page.locator(f'text="{referencia}"').first
+            if not boton_encontrado:
+                raise Exception("No se pudo ejecutar la búsqueda - botón no encontrado")
             
-            if not resultado.is_visible(timeout=15000):
-                raise Exception(f"No se encontró la licitación {referencia} después de buscar")
+            # 4. Esperar que se aplique el filtro - ESPERA EXPLÍCITA
+            print(f"⏳ Esperando confirmación del filtro...")
+            page.wait_for_timeout(2000)
             
-            print(f"✅ Licitación encontrada en resultados")
+            # Buscar el texto "Buscar resultados por" o el link "Borrar búsqueda"
+            filtro_aplicado = False
             
-            # 7. Hacer clic en el botón DETALLE
-            # El botón DETALLE está en la misma fila que la referencia
-            print(f"🔍 Buscando botón DETALLE...")
-            fila = resultado.locator('xpath=ancestor::tr')
-            boton_detalle = fila.locator('button:has-text("DETALLE")').first
+            try:
+                # Opción 1: Texto "Buscar resultados por"
+                indicador_filtro = page.locator('text=Buscar resultados por').first
+                if indicador_filtro.is_visible(timeout=20000):
+                    print(f"✅ Filtro confirmado: 'Buscar resultados por'")
+                    filtro_aplicado = True
+            except:
+                pass
             
-            print(f"🖱️ Haciendo clic en DETALLE...")
-            boton_detalle.click()
+            if not filtro_aplicado:
+                try:
+                    # Opción 2: Link "Borrar búsqueda"
+                    link_borrar = page.locator('a:has-text("Borrar")').first
+                    if link_borrar.is_visible(timeout=5000):
+                        print(f"✅ Filtro confirmado: Link 'Borrar búsqueda'")
+                        filtro_aplicado = True
+                except:
+                    pass
             
-            # 8. Esperar a que se abra el modal
-            print(f"⏳ Esperando modal...")
+            if filtro_aplicado:
+                print(f"✅ FILTRO APLICADO CORRECTAMENTE")
+            else:
+                print(f"⚠️ ADVERTENCIA: No se confirmó el filtro, continuando...")
+            
             page.wait_for_timeout(3000)
             
-            # Verificar que el modal está visible
-            modal = page.locator('.modal-content, .modal-dialog').first
-            modal.wait_for(state='visible', timeout=15000)
+            # 5. Buscar la licitación en los resultados
+            print(f"🔎 Buscando {referencia} en resultados...")
             
-            print(f"✅ Modal abierto")
+            # Probar múltiples XPaths como en el código original
+            resultado = None
+            xpaths = [
+                f'//td[contains(text(), "{referencia}")]',
+                f'//td[text()="{referencia}"]',
+                f'//*[contains(text(), "{referencia}")]',
+                f'//td[normalize-space(text())="{referencia}"]'
+            ]
             
-            # 9. Hacer clic en "Descargar procedimiento"
-            print(f"⬇️ Descargando procedimiento...")
+            for i, xpath in enumerate(xpaths):
+                try:
+                    print(f"   Intentando XPath {i+1}...")
+                    resultado_xpath = page.locator(f'xpath={xpath}').first
+                    if resultado_xpath.is_visible(timeout=10000):
+                        resultado = resultado_xpath
+                        print(f"   ✅ XPath {i+1} funcionó")
+                        break
+                except:
+                    print(f"   ❌ XPath {i+1} falló")
+                    continue
             
-            # Configurar la descarga
+            if not resultado:
+                raise Exception(f"No se encontró la licitación {referencia} en los resultados")
+            
+            print(f"✅ Licitación encontrada en la tabla")
+            
+            # 6. Hacer clic en DETALLE
+            print(f"🖱️ Buscando botón DETALLE...")
+            
+            # Encontrar la fila (tr) que contiene el resultado
+            fila = resultado.locator('xpath=ancestor::tr')
+            
+            # Buscar el botón/link DETALLE en esa fila
+            boton_detalle = None
+            try:
+                boton_detalle = fila.locator('a:has-text("Detalle")').first
+            except:
+                try:
+                    boton_detalle = fila.locator('a:has-text("DETALLE")').first
+                except:
+                    boton_detalle = fila.locator('a:text-matches("etalle", "i")').first
+            
+            if not boton_detalle:
+                raise Exception("No se encontró el botón DETALLE")
+            
+            # Scroll y clic
+            boton_detalle.scroll_into_view_if_needed()
+            page.wait_for_timeout(2000)
+            boton_detalle.click()
+            print(f"✅ Clic en DETALLE")
+            
+            # 7. Esperar que se abra el modal o nueva ventana
+            page.wait_for_timeout(5000)
+            
+            # Verificar si se abrió una nueva pestaña/ventana
+            pages = context.pages
+            if len(pages) > 1:
+                page = pages[-1]  # Usar la última página abierta
+                print(f"✅ Cambiado a nueva ventana")
+            
+            # 8. Buscar el iframe correcto (que contenga la referencia)
+            print(f"🔎 Buscando iframe del detalle...")
+            page.wait_for_timeout(3000)
+            
+            iframes = page.locator('iframe').all()
+            print(f"   Total iframes: {len(iframes)}")
+            
+            iframe_correcto = None
+            for i, iframe_element in enumerate(iframes):
+                try:
+                    print(f"   Probando iframe {i+1}...")
+                    iframe_frame = iframe_element.content_frame()
+                    
+                    if iframe_frame:
+                        # Obtener el texto del iframe
+                        iframe_text = iframe_frame.locator('body').text_content()
+                        
+                        if referencia in iframe_text:
+                            print(f"   ✅ IFRAME CORRECTO encontrado (contiene {referencia})")
+                            iframe_correcto = iframe_frame
+                            break
+                        else:
+                            print(f"   ❌ Iframe no contiene la referencia")
+                except Exception as e:
+                    print(f"   ❌ Error en iframe {i+1}: {str(e)}")
+                    continue
+            
+            if not iframe_correcto:
+                raise Exception("No se encontró iframe con la referencia correcta")
+            
+            # 9. Buscar el botón de descarga en el iframe
+            print(f"⬇️ Buscando botón de descarga...")
+            
+            boton_descarga = None
+            selectores_descarga = [
+                'input[value="Descargar procedimiento"]',
+                'button:has-text("Descargar procedimiento")',
+                'input:has-text("Descargar procedimiento")'
+            ]
+            
+            for selector in selectores_descarga:
+                try:
+                    boton = iframe_correcto.locator(selector).first
+                    if boton.is_visible(timeout=5000):
+                        boton_descarga = boton
+                        print(f"   ✅ Botón encontrado con: {selector}")
+                        break
+                except:
+                    continue
+            
+            if not boton_descarga:
+                raise Exception("No se encontró el botón de descarga")
+            
+            # 10. Descargar el archivo
+            print(f"💾 Iniciando descarga...")
+            
             with page.expect_download(timeout=90000) as download_info:
-                boton_descargar = page.locator('button:has-text("Descargar procedimiento")').first
-                boton_descargar.click()
+                boton_descarga.click()
             
             download = download_info.value
             
-            # 10. Guardar el ZIP
+            # Guardar el ZIP
             zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
             download.save_as(zip_path)
+            print(f"✅ ZIP descargado: {zip_path}")
             
-            print(f"💾 ZIP descargado: {zip_path}")
+            # Verificar que el archivo existe y tiene contenido
+            if not os.path.exists(zip_path):
+                raise Exception("El archivo ZIP no se guardó correctamente")
             
-            # 11. Descomprimir
-            extract_path = f"{TEMP_DIR}/{nombre_seguro}"
+            tamano_mb = os.path.getsize(zip_path) / (1024*1024)
+            print(f"   Tamaño: {tamano_mb:.2f} MB")
+            
+            # 11. Extraer el pliego del ZIP
+            print(f"📦 Extrayendo pliego...")
+            
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
-            
-            print(f"📦 ZIP descomprimido")
-            
-            # 12. Buscar el archivo "pliego" en 1_Publicaciones/Adjuntos
-            pliego_path = None
-            adjuntos_path = f"{extract_path}/1_Publicaciones/Adjuntos"
-            
-            if os.path.exists(adjuntos_path):
-                print(f"📂 Buscando pliego en: {adjuntos_path}")
-                archivos = os.listdir(adjuntos_path)
-                print(f"   Archivos encontrados: {archivos}")
+                archivos_zip = zip_ref.namelist()
+                print(f"   Archivos en ZIP: {len(archivos_zip)}")
                 
-                for file in archivos:
-                    if "pliego" in file.lower():
-                        pliego_path = os.path.join(adjuntos_path, file)
-                        print(f"📄 Pliego encontrado: {file}")
-                        break
+                # Buscar el pliego en /1_Publicaciones/Adjuntos/
+                pliego_encontrado = None
                 
-                if not pliego_path:
-                    # Si no encontró "pliego", listar todos los archivos
-                    print(f"⚠️ No se encontró archivo con 'pliego' en el nombre")
-                    print(f"   Archivos disponibles: {archivos}")
-            else:
-                print(f"❌ No existe la carpeta: {adjuntos_path}")
+                for archivo in archivos_zip:
+                    if '1_Publicaciones/Adjuntos/' in archivo:
+                        nombre_archivo = os.path.basename(archivo)
+                        if 'pliego' in nombre_archivo.lower() and archivo.endswith('.pdf'):
+                            print(f"   ✅ Pliego encontrado: {nombre_archivo}")
+                            
+                            # Extraer solo ese archivo
+                            pliego_path = f"{TEMP_DIR}/{nombre_seguro}_pliego.pdf"
+                            with zip_ref.open(archivo) as source:
+                                with open(pliego_path, 'wb') as target:
+                                    target.write(source.read())
+                            
+                            pliego_encontrado = pliego_path
+                            break
                 
-                # Listar lo que sí existe
-                print(f"📂 Estructura del ZIP:")
-                for root, dirs, files in os.walk(extract_path):
-                    level = root.replace(extract_path, '').count(os.sep)
-                    indent = ' ' * 2 * level
-                    print(f"{indent}{os.path.basename(root)}/")
-                    subindent = ' ' * 2 * (level + 1)
-                    for file in files:
-                        print(f"{subindent}{file}")
+                if not pliego_encontrado:
+                    raise Exception("No se encontró el archivo PLIEGO en el ZIP")
             
+            print(f"📄 Pliego extraído exitosamente")
+            
+            # Cerrar navegador
             browser.close()
             
-            return pliego_path, nombre_seguro
+            return pliego_encontrado
             
         except Exception as e:
             browser.close()
             raise Exception(f"Error al descargar: {str(e)}")
 
-# Endpoint principal
 @app.route('/descargar-pliego', methods=['POST'])
-def descargar_pliego_endpoint():
+def endpoint_descargar_pliego():
     """
-    Este endpoint recibe:
-    - referencia: La referencia de la licitación (ej: SRSEN-DAF-CM-2026-0002)
+    Endpoint para descargar el pliego de una licitación
     
-    Y devuelve el archivo pliego
+    POST /descargar-pliego
+    Body: {"referencia": "SRSEN-DAF-CM-2026-0002"}
     """
-    
-    data = request.json
-    referencia = data.get('referencia')
-    
-    if not referencia:
-        return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
-    
     try:
-        pliego_path, nombre_seguro = descargar_pliego(referencia)
+        data = request.get_json()
+        referencia = data.get('referencia')
         
-        if pliego_path and os.path.exists(pliego_path):
-            return send_file(
-                pliego_path, 
-                as_attachment=True,
-                download_name=f"pliego_{nombre_seguro}.pdf"
-            )
-        else:
-            return jsonify({
-                "error": "No se encontró el pliego",
-                "mensaje": "Revisa los logs en Railway para ver la estructura del ZIP"
-            }), 404
-            
+        if not referencia:
+            return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
+        
+        # Descargar el pliego
+        pliego_path = descargar_pliego(referencia)
+        
+        # Retornar el archivo
+        nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+        
+        return send_file(
+            pliego_path,
+            mimetype='application/pdf',
+            as_attachment=True,
+            download_name=f"pliego_{nombre_seguro}.pdf"
+        )
+        
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Ruta de prueba
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "service": "compita-descarga-pliegos"})
