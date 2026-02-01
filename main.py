@@ -221,11 +221,11 @@ def descargar_pliego(referencia):
                 page = pages[-1]  # Usar la última página abierta
                 print(f"✅ Cambiado a nueva ventana")
             
-            # 8. Buscar el iframe correcto (que contenga la referencia)
+            # 8. Buscar el frame que contiene el botón de descarga
             print(f"🔎 Buscando iframe del detalle...")
             page.wait_for_timeout(3000)
             
-            # En Playwright, los iframes se acceden con page.frames()
+            # En Playwright, los frames se acceden con page.frames
             frames = page.frames
             print(f"   Total frames: {len(frames)}")
             
@@ -234,21 +234,36 @@ def descargar_pliego(referencia):
                 try:
                     print(f"   Probando frame {i+1}...")
                     
-                    # Obtener el contenido del frame
-                    frame_content = frame.content()
+                    # Buscar directamente el botón de descarga en este frame
+                    # Si lo encuentra, este es el frame correcto
+                    boton_test = frame.locator('#tbToolBar_btnTbDownload').first
                     
-                    if referencia in frame_content:
-                        print(f"   ✅ FRAME CORRECTO encontrado (contiene {referencia})")
+                    if boton_test.count() > 0:
+                        print(f"   ✅ FRAME CORRECTO encontrado (tiene botón de descarga)")
                         iframe_correcto = frame
                         break
                     else:
-                        print(f"   ❌ Frame no contiene la referencia")
+                        print(f"   ❌ Frame no tiene el botón")
                 except Exception as e:
-                    print(f"   ❌ Error en frame {i+1}: {str(e)[:50]}")
+                    print(f"   ❌ Error en frame {i+1}: {str(e)[:80]}")
                     continue
             
             if not iframe_correcto:
-                raise Exception("No se encontró iframe con la referencia correcta")
+                # Si no encontró por botón, intentar por referencia en el texto
+                print(f"   Reintentando búsqueda por contenido de texto...")
+                for i, frame in enumerate(frames):
+                    try:
+                        # Intentar obtener el texto del body
+                        body_text = frame.locator('body').text_content(timeout=5000)
+                        if body_text and referencia in body_text:
+                            print(f"   ✅ Frame {i+1} contiene la referencia")
+                            iframe_correcto = frame
+                            break
+                    except:
+                        continue
+            
+            if not iframe_correcto:
+                raise Exception("No se encontró iframe con el botón de descarga")
             
             # 9. Buscar el botón de descarga en el iframe
             print(f"⬇️ Buscando botón de descarga...")
