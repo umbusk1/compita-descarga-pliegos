@@ -253,21 +253,33 @@ def descargar_pliego(referencia):
             # 9. Buscar el botón de descarga en el iframe
             print(f"⬇️ Buscando botón de descarga...")
             
+            # Basado en el HTML real: <input id="tbToolBar_btnTbDownload" type="button" value="Descargar procedimiento">
             boton_descarga = None
             selectores_descarga = [
+                # Por ID (MÁS CONFIABLE)
+                '#tbToolBar_btnTbDownload',
+                'input[id="tbToolBar_btnTbDownload"]',
+                # Por atributo title
+                'input[title="Descargar procedimiento"]',
+                # Por value
                 'input[value="Descargar procedimiento"]',
-                'button:has-text("Descargar procedimiento")',
-                'input:has-text("Descargar procedimiento")'
+                # Por tipo y value
+                'input[type="button"][value="Descargar procedimiento"]'
             ]
             
-            for selector in selectores_descarga:
+            for i, selector in enumerate(selectores_descarga):
                 try:
+                    print(f"   Probando selector {i+1}: {selector}")
                     boton = iframe_correcto.locator(selector).first
-                    if boton.is_visible(timeout=5000):
+                    # Usar count() en lugar de is_visible() para evitar timeouts
+                    if boton.count() > 0:
                         boton_descarga = boton
-                        print(f"   ✅ Botón encontrado con: {selector}")
+                        print(f"   ✅ Selector {i+1} funcionó")
                         break
-                except:
+                    else:
+                        print(f"   ❌ Selector {i+1} no encontró elementos")
+                except Exception as e:
+                    print(f"   ❌ Selector {i+1} error: {str(e)[:50]}")
                     continue
             
             if not boton_descarga:
