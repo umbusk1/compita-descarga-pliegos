@@ -225,27 +225,26 @@ def descargar_pliego(referencia):
             print(f"🔎 Buscando iframe del detalle...")
             page.wait_for_timeout(3000)
             
-            iframes = page.locator('iframe').all()
-            print(f"   Total iframes: {len(iframes)}")
+            # En Playwright, los iframes se acceden con page.frames()
+            frames = page.frames
+            print(f"   Total frames: {len(frames)}")
             
             iframe_correcto = None
-            for i, iframe_element in enumerate(iframes):
+            for i, frame in enumerate(frames):
                 try:
-                    print(f"   Probando iframe {i+1}...")
-                    iframe_frame = iframe_element.content_frame()
+                    print(f"   Probando frame {i+1}...")
                     
-                    if iframe_frame:
-                        # Obtener el texto del iframe
-                        iframe_text = iframe_frame.locator('body').text_content()
-                        
-                        if referencia in iframe_text:
-                            print(f"   ✅ IFRAME CORRECTO encontrado (contiene {referencia})")
-                            iframe_correcto = iframe_frame
-                            break
-                        else:
-                            print(f"   ❌ Iframe no contiene la referencia")
+                    # Obtener el contenido del frame
+                    frame_content = frame.content()
+                    
+                    if referencia in frame_content:
+                        print(f"   ✅ FRAME CORRECTO encontrado (contiene {referencia})")
+                        iframe_correcto = frame
+                        break
+                    else:
+                        print(f"   ❌ Frame no contiene la referencia")
                 except Exception as e:
-                    print(f"   ❌ Error en iframe {i+1}: {str(e)}")
+                    print(f"   ❌ Error en frame {i+1}: {str(e)[:50]}")
                     continue
             
             if not iframe_correcto:
