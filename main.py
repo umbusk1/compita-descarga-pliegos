@@ -46,14 +46,24 @@ def descargar_pliego(referencia):
             # 2. Encontrar el campo de búsqueda
             # El campo está bajo el texto "Buscar Proceso de Compra"
             campo_busqueda = page.locator('input[type="text"]').first
+            campo_busqueda.wait_for(state='visible', timeout=10000)
             
             # 3. Escribir la referencia en el campo
             campo_busqueda.fill(referencia)
             print(f"✍️ Referencia ingresada: {referencia}")
             
+            # Esperar un poco después de escribir
+            page.wait_for_timeout(1000)
+            
             # 4. Hacer clic en el botón "Buscar"
-            boton_buscar = page.locator('button:has-text("Buscar")').first
+            # Ser más específico: buscar el botón cerca del input
+            print(f"🔎 Buscando el botón Buscar...")
+            boton_buscar = page.get_by_role("button", name="Buscar").first
+            boton_buscar.wait_for(state='visible', timeout=10000)
+            print(f"✅ Botón Buscar encontrado")
+            
             boton_buscar.click()
+            print(f"✅ Clic en Buscar realizado")
             
             print(f"⏳ Esperando resultados de búsqueda...")
             
@@ -62,6 +72,7 @@ def descargar_pliego(referencia):
             
             # 6. Verificar que hay resultados
             # Buscar la referencia en la tabla filtrada
+            print(f"🔍 Buscando {referencia} en los resultados...")
             resultado = page.locator(f'text="{referencia}"').first
             
             if not resultado.is_visible(timeout=15000):
@@ -71,6 +82,7 @@ def descargar_pliego(referencia):
             
             # 7. Hacer clic en el botón DETALLE
             # El botón DETALLE está en la misma fila que la referencia
+            print(f"🔍 Buscando botón DETALLE...")
             fila = resultado.locator('xpath=ancestor::tr')
             boton_detalle = fila.locator('button:has-text("DETALLE")').first
             
@@ -78,6 +90,7 @@ def descargar_pliego(referencia):
             boton_detalle.click()
             
             # 8. Esperar a que se abra el modal
+            print(f"⏳ Esperando modal...")
             page.wait_for_timeout(3000)
             
             # Verificar que el modal está visible
