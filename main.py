@@ -12,7 +12,7 @@ TEMP_DIR = "/tmp/descargas"
 
 def descargar_pliego(referencia):
     """
-    Descarga el pliego usando la MISMA lógica que funcionó en Selenium
+    Descarga el documento principal de una licitación (pliego, ficha, términos, etc.)
     """
     
     # Crear carpeta temporal si no existe
@@ -320,40 +320,79 @@ def descargar_pliego(referencia):
             tamano_mb = os.path.getsize(zip_path) / (1024*1024)
             print(f"   Tamaño: {tamano_mb:.2f} MB")
             
-            # 11. Extraer el pliego del ZIP
-            print(f"📦 Extrayendo pliego...")
+            # 11. Extraer el documento principal del ZIP
+            print(f"📦 Extrayendo documento principal...")
             
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 archivos_zip = zip_ref.namelist()
                 print(f"   Archivos en ZIP: {len(archivos_zip)}")
                 
-                # Buscar el pliego en /1_Publicaciones/Adjuntos/
-                pliego_encontrado = None
+                # Buscar el documento principal en /1_Publicaciones/Adjuntos/
+                documento_encontrado = None
                 
-                for archivo in archivos_zip:
-                    if '1_Publicaciones/Adjuntos/' in archivo:
-                        nombre_archivo = os.path.basename(archivo)
-                        if 'pliego' in nombre_archivo.lower() and archivo.endswith('.pdf'):
-                            print(f"   ✅ Pliego encontrado: {nombre_archivo}")
-                            
-                            # Extraer solo ese archivo
-                            pliego_path = f"{TEMP_DIR}/{nombre_seguro}_pliego.pdf"
-                            with zip_ref.open(archivo) as source:
-                                with open(pliego_path, 'wb') as target:
-                                    target.write(source.read())
-                            
-                            pliego_encontrado = pliego_path
-                            break
+                # Palabras clave a buscar (en orden de prioridad)
+                palabras_clave = ['pliego', 'ficha', 'terminos', 'términos', 'especificaciones', 'anexo']
                 
-                if not pliego_encontrado:
-                    raise Exception("No se encontró el archivo PLIEGO en el ZIP")
+                # ESTRATEGIA 1: Buscar por palabras clave
+                for palabra in palabras_clave:
+                    if documento_encontrado:
+                        break
+                    
+                    for archivo in archivos_zip:
+                        if '1_Publicaciones/Adjuntos/' in archivo:
+                            nombre_archivo = os.path.basename(archivo).lower()
+                            
+                            if palabra in nombre_archivo and archivo.endswith('.pdf'):
+                                print(f"   ✅ Documento encontrado por '{palabra}': {os.path.basename(archivo)}")
+                                
+                                # Extraer solo ese archivo
+                                documento_path = f"{TEMP_DIR}/{nombre_seguro}_documento.pdf"
+                                with zip_ref.open(archivo) as source:
+                                    with open(documento_path, 'wb') as target:
+                                        target.write(source.read())
+                                
+                                documento_encontrado = documento_path
+                                break
+                
+                # ESTRATEGIA 2: Si no encontró por palabra clave, buscar el PDF más grande en Adjuntos
+                if not documento_encontrado:
+                    print(f"   ⚠️ No se encontró por palabras clave, buscando PDF más grande...")
+                    
+                    pdfs_en_adjuntos = []
+                    for archivo in archivos_zip:
+                        if '1_Publicaciones/Adjuntos/' in archivo and archivo.endswith('.pdf'):
+                            # Obtener el tamaño del archivo
+                            info = zip_ref.getinfo(archivo)
+                            pdfs_en_adjuntos.append({
+                                'nombre': archivo,
+                                'tamano': info.file_size
+                            })
+                    
+                    if pdfs_en_adjuntos:
+                        # Ordenar por tamaño (más grande primero)
+                        pdfs_en_adjuntos.sort(key=lambda x: x['tamano'], reverse=True)
+                        archivo_mas_grande = pdfs_en_adjuntos[0]['nombre']
+                        
+                        print(f"   ✅ Usando PDF más grande: {os.path.basename(archivo_mas_grande)}")
+                        print(f"      Tamaño: {pdfs_en_adjuntos[0]['tamano'] / 1024:.1f} KB")
+                        
+                        # Extraer el archivo más grande
+                        documento_path = f"{TEMP_DIR}/{nombre_seguro}_documento.pdf"
+                        with zip_ref.open(archivo_mas_grande) as source:
+                            with open(documento_path, 'wb') as target:
+                                target.write(source.read())
+                        
+                        documento_encontrado = documento_path
+                
+                if not documento_encontrado:
+                    raise Exception("No se encontró ningún documento principal en el ZIP")
             
-            print(f"📄 Pliego extraído exitosamente")
+            print(f"📄 Documento extraído exitosamente")
             
             # Cerrar navegador
             browser.close()
             
-            return pliego_encontrado
+            return documento_encontrado
             
         except Exception as e:
             browser.close()
@@ -362,7 +401,7 @@ def descargar_pliego(referencia):
 @app.route('/descargar-pliego', methods=['POST'])
 def endpoint_descargar_pliego():
     """
-    Endpoint para descargar el pliego de una licitación
+    Endpoint para descargar el documento principal de una licitación
     
     POST /descargar-pliego
     Body: {"referencia": "SRSEN-DAF-CM-2026-0002"}
@@ -374,17 +413,17 @@ def endpoint_descargar_pliego():
         if not referencia:
             return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
         
-        # Descargar el pliego
-        pliego_path = descargar_pliego(referencia)
+        # Descargar el documento principal
+        documento_path = descargar_pliego(referencia)
         
         # Retornar el archivo
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
         
         return send_file(
-            pliego_path,
+            documento_path,
             mimetype='application/pdf',
             as_attachment=True,
-            download_name=f"pliego_{nombre_seguro}.pdf"
+            download_name=f"documento_{nombre_seguro}.pdf"
         )
         
     except Exception as e:
