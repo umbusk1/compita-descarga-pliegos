@@ -4,11 +4,72 @@ import os
 import zipfile
 import time
 import re
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Ruta donde se guardarán los archivos temporales
+# Ruta donde se guardarán los archivos (persistentes por 30 días)
 TEMP_DIR = "/tmp/descargas"
+CACHE_DIAS = 30  # Días para mantener archivos en cache
+
+def limpiar_archivos_viejos():
+    """
+    Limpia archivos con más de CACHE_DIAS días
+    """
+    try:
+        if not os.path.exists(TEMP_DIR):
+            return
+        
+        ahora = time.time()
+        archivos_borrados = 0
+        
+        for archivo in os.listdir(TEMP_DIR):
+            ruta_completa = os.path.join(TEMP_DIR, archivo)
+            
+            # Verificar edad del archivo
+            edad_segundos = ahora - os.path.getmtime(ruta_completa)
+            edad_dias = edad_segundos / (60 * 60 * 24)
+            
+            if edad_dias > CACHE_DIAS:
+                try:
+                    os.remove(ruta_completa)
+                    archivos_borrados += 1
+                    print(f"🗑️ Borrado: {archivo} (edad: {edad_dias:.1f} días)")
+                except Exception as e:
+                    print(f"⚠️ Error borrando {archivo}: {str(e)}")
+        
+        if archivos_borrados > 0:
+            print(f"✅ Limpieza completada: {archivos_borrados} archivos borrados")
+    
+    except Exception as e:
+        print(f"⚠️ Error en limpieza automática: {str(e)}")
+
+def verificar_archivo_en_cache(referencia):
+    """
+    Verifica si el archivo ya existe en cache (menos de 30 días)
+    Retorna la ruta del archivo si existe, None si no
+    """
+    try:
+        nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+        
+        # Buscar archivos que coincidan con la referencia
+        for archivo in os.listdir(TEMP_DIR):
+            if archivo.startswith(nombre_seguro) and archivo.endswith('_documento.pdf'):
+                ruta_completa = os.path.join(TEMP_DIR, archivo)
+                
+                # Verificar edad
+                edad_segundos = time.time() - os.path.getmtime(ruta_completa)
+                edad_dias = edad_segundos / (60 * 60 * 24)
+                
+                if edad_dias <= CACHE_DIAS:
+                    print(f"📦 Archivo en cache encontrado (edad: {edad_dias:.1f} días)")
+                    return ruta_completa
+        
+        return None
+    
+    except Exception as e:
+        print(f"⚠️ Error verificando cache: {str(e)}")
+        return None
 
 def descargar_pliego(referencia):
     """
@@ -346,7 +407,7 @@ def descargar_pliego(referencia):
                                 print(f"   ✅ Documento encontrado por '{palabra}': {os.path.basename(archivo)}")
                                 
                                 # Extraer solo ese archivo
-                                documento_path = f"{TEMP_DIR}/{nombre_seguro}_documento.pdf"
+                                documento_path = f"{TEMP_DIR}/{nombre_seguro}_{int(time.time())}_documento.pdf"
                                 with zip_ref.open(archivo) as source:
                                     with open(documento_path, 'wb') as target:
                                         target.write(source.read())
@@ -377,7 +438,7 @@ def descargar_pliego(referencia):
                         print(f"      Tamaño: {pdfs_en_adjuntos[0]['tamano'] / 1024:.1f} KB")
                         
                         # Extraer el archivo más grande
-                        documento_path = f"{TEMP_DIR}/{nombre_seguro}_documento.pdf"
+                        documento_path = f"{TEMP_DIR}/{nombre_seguro}_{int(time.time())}_documento.pdf"
                         with zip_ref.open(archivo_mas_grande) as source:
                             with open(documento_path, 'wb') as target:
                                 target.write(source.read())
@@ -388,6 +449,14 @@ def descargar_pliego(referencia):
                     raise Exception("No se encontró ningún documento principal en el ZIP")
             
             print(f"📄 Documento extraído exitosamente")
+            
+            # Borrar el ZIP (ya no lo necesitamos, solo guardamos el PDF)
+            try:
+                if os.path.exists(zip_path):
+                    os.remove(zip_path)
+                    print(f"🗑️ ZIP eliminado (solo guardamos el PDF)")
+            except Exception as e:
+                print(f"⚠️ Error borrando ZIP: {str(e)}")
             
             # Cerrar navegador
             browser.close()
@@ -402,6 +471,7 @@ def descargar_pliego(referencia):
 def endpoint_descargar_pliego():
     """
     Endpoint para descargar el documento principal de una licitación
+    Guarda archivos en cache por 30 días para análisis posterior
     
     POST /descargar-pliego
     Body: {"referencia": "SRSEN-DAF-CM-2026-0002"}
@@ -413,10 +483,20 @@ def endpoint_descargar_pliego():
         if not referencia:
             return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
         
-        # Descargar el documento principal
-        documento_path = descargar_pliego(referencia)
+        # Ejecutar limpieza automática de archivos viejos
+        limpiar_archivos_viejos()
         
-        # Retornar el archivo
+        # Verificar si el archivo ya existe en cache
+        documento_path = verificar_archivo_en_cache(referencia)
+        
+        if documento_path:
+            print(f"✅ Usando documento en cache")
+        else:
+            # No está en cache, descargar
+            print(f"🔽 Descargando documento (no está en cache)")
+            documento_path = descargar_pliego(referencia)
+        
+        # Retornar el archivo (NO lo borramos, se queda en cache)
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
         
         return send_file(
@@ -432,6 +512,53 @@ def endpoint_descargar_pliego():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({"status": "ok", "service": "compita-descarga-pliegos"})
+
+@app.route('/cache/info', methods=['GET'])
+def cache_info():
+    """
+    Retorna información sobre archivos en cache
+    """
+    try:
+        if not os.path.exists(TEMP_DIR):
+            return jsonify({"archivos": 0, "tamano_total_mb": 0, "archivos_list": []})
+        
+        archivos_info = []
+        tamano_total = 0
+        
+        for archivo in os.listdir(TEMP_DIR):
+            ruta_completa = os.path.join(TEMP_DIR, archivo)
+            tamano = os.path.getsize(ruta_completa)
+            edad_segundos = time.time() - os.path.getmtime(ruta_completa)
+            edad_dias = edad_segundos / (60 * 60 * 24)
+            
+            archivos_info.append({
+                "nombre": archivo,
+                "tamano_mb": round(tamano / (1024 * 1024), 2),
+                "edad_dias": round(edad_dias, 1)
+            })
+            
+            tamano_total += tamano
+        
+        return jsonify({
+            "archivos": len(archivos_info),
+            "tamano_total_mb": round(tamano_total / (1024 * 1024), 2),
+            "cache_dias": CACHE_DIAS,
+            "archivos_list": archivos_info
+        })
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/cache/limpiar', methods=['POST'])
+def cache_limpiar():
+    """
+    Fuerza la limpieza de archivos viejos
+    """
+    try:
+        limpiar_archivos_viejos()
+        return jsonify({"status": "ok", "mensaje": "Limpieza ejecutada"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
