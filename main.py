@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import base64
 import json
 import requests
+from pypdf import PdfReader
 
 app = Flask(__name__)
 CORS(app, origins=["https://compita.umbusk.com"])
@@ -518,7 +519,7 @@ def endpoint_descargar_pliego():
 def analizar_pliego():
     """
     Analiza un pliego con Claude AI.
-    Primero verifica si está en cache, si no lo descarga.
+    Extrae el texto del PDF y lo envía como texto plano (más eficiente).
     
     POST /analizar-pliego
     Body: {
@@ -550,12 +551,55 @@ def analizar_pliego():
         else:
             print(f"✅ Usando archivo desde cache: {archivo_pdf}")
         
-        # 3. Leer el contenido del PDF como base64
-        with open(archivo_pdf, 'rb') as f:
-            pdf_bytes = f.read()
-            pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        # 3. Verificar tamaño del PDF
+        tamano_bytes = os.path.getsize(archivo_pdf)
+        tamano_mb = tamano_bytes / (1024 * 1024)
+        print(f"📏 Tamaño del PDF: {tamano_mb:.2f} MB")
         
-        # 4. Crear el prompt para Claude
+        # LÍMITE: 10 MB (ahora podemos manejar archivos más grandes porque extraemos texto)
+        if tamano_mb > 10:
+            print(f"⚠️ PDF demasiado grande: {tamano_mb:.2f} MB (límite: 10 MB)")
+            return jsonify({
+                'success': False,
+                'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). El análisis automático está limitado a pliegos de hasta 10 MB.'
+            }), 400
+        
+        # 4. Extraer texto del PDF
+        print(f"📄 Extrayendo texto del PDF...")
+        try:
+            reader = PdfReader(archivo_pdf)
+            texto_completo = ""
+            
+            for i, page in enumerate(reader.pages):
+                try:
+                    texto_pagina = page.extract_text()
+                    if texto_pagina:
+                        texto_completo += texto_pagina + "\n\n"
+                except Exception as e:
+                    print(f"⚠️ Error extrayendo página {i+1}: {str(e)}")
+                    continue
+            
+            if not texto_completo.strip():
+                return jsonify({
+                    'success': False,
+                    'error': 'No se pudo extraer texto del PDF. El documento puede estar protegido o ser solo imágenes.'
+                }), 400
+            
+            # Limitar texto a ~100,000 caracteres (aprox 25,000 tokens)
+            if len(texto_completo) > 100000:
+                print(f"⚠️ Texto muy largo ({len(texto_completo)} caracteres), truncando...")
+                texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO - Análisis basado en las primeras páginas]"
+            
+            print(f"✅ Texto extraído: {len(texto_completo)} caracteres, {len(reader.pages)} páginas")
+            
+        except Exception as e:
+            print(f"❌ Error al leer PDF: {str(e)}")
+            return jsonify({
+                'success': False,
+                'error': f'Error al procesar el PDF: {str(e)}'
+            }), 400
+        
+        # 5. Crear el prompt para Claude
         prompt_analisis = f"""Eres un experto analista de licitaciones públicas dominicanas.
 
 CONTEXTO DE LA LICITACIÓN:
@@ -564,8 +608,14 @@ CONTEXTO DE LA LICITACIÓN:
 - Descripción: {descripcion}
 - Monto estimado: RD${monto:,.2f}
 
+A continuación está el contenido completo del pliego de condiciones:
+
+---INICIO DEL PLIEGO---
+{texto_completo}
+---FIN DEL PLIEGO---
+
 INSTRUCCIONES:
-Analiza el pliego adjunto y proporciona un análisis estructurado en formato JSON con esta estructura exacta:
+Analiza el pliego y proporciona un análisis estructurado en formato JSON con esta estructura exacta:
 
 {{
   "sintesis": "Resumen ejecutivo en 2-3 oraciones sobre qué se está licitando y para qué institución",
@@ -599,13 +649,11 @@ IMPORTANTE:
 - Responde SOLO con el JSON, sin texto adicional ni markdown
 - Sé específico y práctico en cada punto basándote en el contenido real del pliego
 - Identifica detalles concretos del documento (fechas, requisitos técnicos, experiencia requerida, etc.)
-- Si el pliego es muy técnico, destaca los requisitos más críticos para participar
-- Evalúa la complejidad del proceso de licitación descrito en el pliego"""
+- Si el pliego es muy técnico, destaca los requisitos más críticos para participar"""
 
-        # 5. Llamar a Claude API
+        # 6. Llamar a Claude API
         api_url = "https://api.anthropic.com/v1/messages"
         
-        # IMPORTANTE: La API key debe estar en variable de entorno de Railway
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
             return jsonify({
@@ -625,43 +673,30 @@ IMPORTANTE:
             "messages": [
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "document",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "application/pdf",
-                                "data": pdf_base64
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt_analisis
-                        }
-                    ]
+                    "content": prompt_analisis
                 }
             ]
         }
         
-        print("🤖 Enviando PDF a Claude AI...")
+        print("🤖 Enviando texto del pliego a Claude AI...")
         response = requests.post(api_url, headers=headers, json=payload, timeout=120)
         
         if response.status_code != 200:
-            error_detail = response.text[:500]  # Primeros 500 caracteres del error
-            raise Exception(f"Error de Claude API: {response.status_code} - {error_detail}")
+            error_detail = response.text[:500]
+            print(f"❌ Error de Claude API: {response.status_code} - {error_detail}")
+            raise Exception(f"Error de Claude API: {response.status_code}")
         
-        # 6. Extraer el análisis de la respuesta
+        # 7. Extraer el análisis de la respuesta
         claude_response = response.json()
         analisis_texto = claude_response['content'][0]['text']
         
-        # 7. Parsear el JSON del análisis
-        # Limpiar posibles markdown backticks
+        # 8. Parsear el JSON del análisis
         analisis_texto = analisis_texto.replace('```json', '').replace('```', '').strip()
         analisis = json.loads(analisis_texto)
         
         print(f"✅ Análisis completado con puntuación: {analisis.get('puntuacion', 0)}")
         
-        # 8. Retornar resultado
+        # 9. Retornar resultado
         return jsonify({
             'success': True,
             'pliego_analizado': True,
