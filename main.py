@@ -1,14 +1,17 @@
 from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS  # ← NUEVO
+from flask_cors import CORS
 from playwright.sync_api import sync_playwright
 import os
 import zipfile
 import time
 import re
 from datetime import datetime, timedelta
+import base64
+import json
+import requests
 
 app = Flask(__name__)
-CORS(app, origins=["https://compita.umbusk.com"])  # ← NUEVO - Permite peticiones desde tu dashboard
+CORS(app, origins=["https://compita.umbusk.com"])
 
 # Ruta donde se guardarán los archivos (persistentes por 30 días)
 TEMP_DIR = "/tmp/descargas"
@@ -510,6 +513,174 @@ def endpoint_descargar_pliego():
         
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/analizar-pliego', methods=['POST'])
+def analizar_pliego():
+    """
+    Analiza un pliego con Claude AI.
+    Primero verifica si está en cache, si no lo descarga.
+    
+    POST /analizar-pliego
+    Body: {
+        "referencia": "SRSEN-DAF-CM-2026-0002",
+        "titulo": "Título de la licitación",
+        "descripcion": "Descripción",
+        "monto": 1725000
+    }
+    """
+    try:
+        data = request.get_json()
+        referencia = data.get('referencia')
+        titulo = data.get('titulo', '')
+        descripcion = data.get('descripcion', '')
+        monto = data.get('monto', 0)
+        
+        if not referencia:
+            return jsonify({'success': False, 'error': 'Falta referencia'}), 400
+        
+        print(f"📊 Iniciando análisis de {referencia}")
+        
+        # 1. Verificar si el archivo ya está en cache
+        archivo_pdf = verificar_archivo_en_cache(referencia)
+        
+        # 2. Si no está en cache, descargarlo
+        if not archivo_pdf:
+            print(f"📥 Archivo no encontrado en cache, descargando...")
+            archivo_pdf = descargar_pliego(referencia)
+        else:
+            print(f"✅ Usando archivo desde cache: {archivo_pdf}")
+        
+        # 3. Leer el contenido del PDF como base64
+        with open(archivo_pdf, 'rb') as f:
+            pdf_bytes = f.read()
+            pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+        
+        # 4. Crear el prompt para Claude
+        prompt_analisis = f"""Eres un experto analista de licitaciones públicas dominicanas.
+
+CONTEXTO DE LA LICITACIÓN:
+- Referencia: {referencia}
+- Título: {titulo}
+- Descripción: {descripcion}
+- Monto estimado: RD${monto:,.2f}
+
+INSTRUCCIONES:
+Analiza el pliego adjunto y proporciona un análisis estructurado en formato JSON con esta estructura exacta:
+
+{{
+  "sintesis": "Resumen ejecutivo en 2-3 oraciones sobre qué se está licitando y para qué institución",
+  "oportunidades": [
+    "Primera oportunidad identificada (específica del pliego)",
+    "Segunda oportunidad identificada (específica del pliego)",
+    "Tercera oportunidad identificada (específica del pliego)"
+  ],
+  "riesgos": [
+    "Primer riesgo o desafío identificado (específico del pliego)",
+    "Segundo riesgo o desafío identificado (específico del pliego)",
+    "Tercer riesgo o desafío identificado (específico del pliego)"
+  ],
+  "requisitos": [
+    "Primer requisito clave para participar (específico del pliego)",
+    "Segundo requisito clave para participar (específico del pliego)",
+    "Tercer requisito clave para participar (específico del pliego)"
+  ],
+  "recomendacion": "Recomendación clara sobre si vale la pena participar y por qué, basada en el contenido del pliego",
+  "puntuacion": 75
+}}
+
+CRITERIOS PARA LA PUNTUACIÓN (0-100):
+- 90-100: Excelente oportunidad, alta probabilidad de éxito, pliego claro y requisitos razonables
+- 70-89: Buena oportunidad, considerar participar, balance favorable entre esfuerzo y beneficio
+- 50-69: Oportunidad moderada, evaluar capacidades cuidadosamente
+- 30-49: Oportunidad limitada, alta competencia o requisitos complejos
+- 0-29: No recomendado, riesgos superan beneficios o requisitos inviables
+
+IMPORTANTE:
+- Responde SOLO con el JSON, sin texto adicional ni markdown
+- Sé específico y práctico en cada punto basándote en el contenido real del pliego
+- Identifica detalles concretos del documento (fechas, requisitos técnicos, experiencia requerida, etc.)
+- Si el pliego es muy técnico, destaca los requisitos más críticos para participar
+- Evalúa la complejidad del proceso de licitación descrito en el pliego"""
+
+        # 5. Llamar a Claude API
+        api_url = "https://api.anthropic.com/v1/messages"
+        
+        # IMPORTANTE: La API key debe estar en variable de entorno de Railway
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            return jsonify({
+                'success': False,
+                'error': 'API key de Anthropic no configurada en Railway'
+            }), 500
+        
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+        
+        payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 2000,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf_base64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt_analisis
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        print("🤖 Enviando PDF a Claude AI...")
+        response = requests.post(api_url, headers=headers, json=payload, timeout=120)
+        
+        if response.status_code != 200:
+            error_detail = response.text[:500]  # Primeros 500 caracteres del error
+            raise Exception(f"Error de Claude API: {response.status_code} - {error_detail}")
+        
+        # 6. Extraer el análisis de la respuesta
+        claude_response = response.json()
+        analisis_texto = claude_response['content'][0]['text']
+        
+        # 7. Parsear el JSON del análisis
+        # Limpiar posibles markdown backticks
+        analisis_texto = analisis_texto.replace('```json', '').replace('```', '').strip()
+        analisis = json.loads(analisis_texto)
+        
+        print(f"✅ Análisis completado con puntuación: {analisis.get('puntuacion', 0)}")
+        
+        # 8. Retornar resultado
+        return jsonify({
+            'success': True,
+            'pliego_analizado': True,
+            'analisis': analisis
+        })
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ Error parseando JSON del análisis: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': 'Error al procesar respuesta de Claude AI'
+        }), 500
+        
+    except Exception as e:
+        print(f"❌ Error en análisis: {str(e)}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
 
 @app.route('/health', methods=['GET'])
 def health():
