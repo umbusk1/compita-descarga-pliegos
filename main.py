@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS  # ← NUEVO
 from playwright.sync_api import sync_playwright
 import os
 import zipfile
@@ -7,6 +8,7 @@ import re
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
+CORS(app, origins=["https://compita.umbusk.com"])  # ← NUEVO - Permite peticiones desde tu dashboard
 
 # Ruta donde se guardarán los archivos (persistentes por 30 días)
 TEMP_DIR = "/tmp/descargas"
