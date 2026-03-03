@@ -556,12 +556,12 @@ def analizar_pliego():
         tamano_mb = tamano_bytes / (1024 * 1024)
         print(f"📏 Tamaño del PDF: {tamano_mb:.2f} MB")
         
-        # LÍMITE: 10 MB (ahora podemos manejar archivos más grandes porque extraemos texto)
-        if tamano_mb > 10:
-            print(f"⚠️ PDF demasiado grande: {tamano_mb:.2f} MB (límite: 10 MB)")
+        # Límite generoso: el texto extraído siempre será mucho menor que el PDF
+        if tamano_mb > 50:
+            print(f"⚠️ PDF excesivamente grande: {tamano_mb:.2f} MB")
             return jsonify({
                 'success': False,
-                'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). El análisis automático está limitado a pliegos de hasta 10 MB.'
+                'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). Límite: 50 MB.'
             }), 400
         
         # 4. Extraer texto del PDF
