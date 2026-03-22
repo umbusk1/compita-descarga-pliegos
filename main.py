@@ -405,6 +405,7 @@ def analizar_pliego():
         monto = data.get('monto', 0)
         empresa_descripcion = data.get('empresa_descripcion', '')
         empresa_website = data.get('empresa_website', '')
+        fecha_hoy = datetime.now().strftime('%d/%m/%Y')
 
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
@@ -487,6 +488,7 @@ CONTEXTO DE LA LICITACIÓN:
 - Título: {titulo}
 - Descripción: {descripcion}
 - Monto estimado: RD${monto:,.2f}
+- Fecha de hoy (cuando el usuario solicita este análisis): {fecha_hoy}
 {seccion_perfil}
 A continuación está el contenido completo del pliego de condiciones:
 
@@ -514,30 +516,42 @@ Analiza el pliego y proporciona un análisis estructurado en formato JSON con es
     "Segundo requisito clave para participar (específico del pliego)",
     "Tercer requisito clave para participar (específico del pliego)"
   ],
+  "tiempos": {{
+    "fecha_limite_oferta": "DD/MM/YYYY — fecha límite para presentar la oferta según el pliego",
+    "dias_calendario_restantes": "N días desde hoy ({fecha_hoy}) hasta la fecha límite",
+    "alerta": "Elige UNO: HOLGADO, AJUSTADO, o MUY AJUSTADO (menos de 5 días hábiles es MUY AJUSTADO, menos de 10 es AJUSTADO)",
+    "fechas_clave": [
+      "Lista cada fecha relevante del pliego: apertura de sobres, plazo para preguntas, visitas técnicas, etc."
+    ],
+    "advertencia": "Si el tiempo es AJUSTADO o MUY AJUSTADO, explica concretamente qué pasos de la preparación de la oferta se verían comprometidos. Dejar vacío si es HOLGADO."
+  }},
   "viabilidad": {{
     "veredicto": "Elige UNO: VIABLE, VIABLE CON RIESGOS, o DIFÍCIL DE CUMPLIR",
-    "tiempo_presentacion": "X días hábiles hasta el cierre — [HOLGADO | AJUSTADO | MUY AJUSTADO]",
     "garantias": "Descripción de garantías o fianzas exigidas y si son proporcionales al monto",
-    "experiencia_previa": "Qué experiencia previa exige el pliego y si es un obstáculo",
+    "experiencia_previa": "Qué experiencia previa exige el pliego y si es un obstáculo real",
     "especificaciones_tecnicas": "Si las marcas, modelos o especificaciones coinciden con el perfil de la empresa"
   }},
-  "recomendacion": "Recomendación clara sobre si vale la pena participar y por qué, considerando el perfil de la empresa y los requisitos del pliego",
-  "puntuacion": 75
+  "evaluacion": {{
+    "a_favor": [
+      "Primer argumento técnico a favor de presentar la oferta",
+      "Segundo argumento técnico a favor",
+      "Tercer argumento técnico a favor"
+    ],
+    "en_contra": [
+      "Primer argumento técnico en contra o factor de riesgo",
+      "Segundo argumento técnico en contra",
+      "Tercer argumento técnico en contra"
+    ]
+  }}
 }}
-
-CRITERIOS PARA LA PUNTUACIÓN (0-100):
-- 90-100: Excelente oportunidad, alta probabilidad de éxito, pliego claro y requisitos razonables
-- 70-89: Buena oportunidad, considerar participar, balance favorable entre esfuerzo y beneficio
-- 50-69: Oportunidad moderada, evaluar capacidades cuidadosamente
-- 30-49: Oportunidad limitada, alta competencia o requisitos complejos
-- 0-29: No recomendado, riesgos superan beneficios o requisitos inviables
 
 IMPORTANTE:
 - Responde SOLO con el JSON, sin texto adicional ni markdown
-- Sé específico y práctico en cada punto basándote en el contenido real del pliego
-- Para la sección "viabilidad", revisa explícitamente: fechas de presentación, garantías exigidas, experiencia previa requerida, y especificaciones técnicas
-- Si el perfil de la empresa está disponible, úsalo para evaluar si las especificaciones técnicas coinciden
-- Si el pliego es muy técnico, destaca los requisitos más críticos para participar"""
+- Sé específico y práctico basándote en el contenido real del pliego
+- En "tiempos", usa la fecha de hoy ({fecha_hoy}) para calcular días restantes
+- En "evaluacion", usa lenguaje técnico y descriptivo — evita frases como "se recomienda" o "no se recomienda"
+- En "viabilidad", revisa explícitamente garantías, experiencia previa y especificaciones técnicas
+- Si el perfil de la empresa está disponible, úsalo para evaluar compatibilidad técnica"""
 
         # 7. Llamar a Claude API
         api_url = "https://api.anthropic.com/v1/messages"
