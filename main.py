@@ -405,6 +405,7 @@ def analizar_pliego():
         monto = data.get('monto', 0)
         empresa_descripcion = data.get('empresa_descripcion', '')
         empresa_website = data.get('empresa_website', '')
+        fecha_presentacion = data.get('fecha_presentacion', '')
         fecha_hoy = datetime.now().strftime('%d/%m/%Y')
 
         if not referencia:
@@ -489,6 +490,7 @@ CONTEXTO DE LA LICITACIÓN:
 - Descripción: {descripcion}
 - Monto estimado: RD${monto:,.2f}
 - Fecha de hoy (cuando el usuario solicita este análisis): {fecha_hoy}
+- Fecha límite de presentación de oferta (del dashboard): {fecha_presentacion if fecha_presentacion else 'No disponible'}
 {seccion_perfil}
 A continuación está el contenido completo del pliego de condiciones:
 
@@ -548,7 +550,7 @@ Analiza el pliego y proporciona un análisis estructurado en formato JSON con es
 IMPORTANTE:
 - Responde SOLO con el JSON, sin texto adicional ni markdown
 - Sé específico y práctico basándote en el contenido real del pliego
-- En "tiempos", usa la fecha de hoy ({fecha_hoy}) para calcular días restantes
+- En "tiempos", la fecha límite de presentación viene del dashboard: {fecha_presentacion if fecha_presentacion else 'no disponible'}. Úsala como fecha límite principal para calcular días hábiles restantes desde hoy ({fecha_hoy}). Si el pliego no tiene cronograma, indica que las demás fechas del proceso (aclaraciones, apertura, etc.) no están en el documento y que habría que revisar los documentos complementarios del expediente.
 - En "evaluacion", usa lenguaje técnico y descriptivo — evita frases como "se recomienda" o "no se recomienda"
 - En "viabilidad", revisa explícitamente garantías, experiencia previa y especificaciones técnicas
 - Si el perfil de la empresa está disponible, úsalo para evaluar compatibilidad técnica"""
