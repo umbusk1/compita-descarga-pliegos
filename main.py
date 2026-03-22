@@ -531,7 +531,7 @@ def analizar_pliego():
     """
     try:
         data = request.get_json()
-	referencia = data.get('referencia')
+        referencia = data.get('referencia')
         titulo = data.get('titulo', '')
         descripcion = data.get('descripcion', '')
         monto = data.get('monto', 0)
