@@ -531,10 +531,12 @@ def analizar_pliego():
     """
     try:
         data = request.get_json()
-        referencia = data.get('referencia')
+	referencia = data.get('referencia')
         titulo = data.get('titulo', '')
         descripcion = data.get('descripcion', '')
         monto = data.get('monto', 0)
+        empresa_descripcion = data.get('empresa_descripcion', '')
+        empresa_website = data.get('empresa_website', '')
         
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
@@ -600,6 +602,17 @@ def analizar_pliego():
             }), 400
         
         # 5. Crear el prompt para Claude
+perfil_empresa = ""
+        if empresa_descripcion:
+            perfil_empresa += f"\n- Descripción: {empresa_descripcion}"
+        if empresa_website:
+            perfil_empresa += f"\n- Sitio web: {empresa_website}"
+
+        seccion_perfil = f"""
+PERFIL DE LA EMPRESA QUE EVALÚA:
+{perfil_empresa if perfil_empresa else "No disponible"}
+""" if perfil_empresa else ""
+
         prompt_analisis = f"""Eres un experto analista de licitaciones públicas dominicanas.
 
 CONTEXTO DE LA LICITACIÓN:
@@ -607,7 +620,7 @@ CONTEXTO DE LA LICITACIÓN:
 - Título: {titulo}
 - Descripción: {descripcion}
 - Monto estimado: RD${monto:,.2f}
-
+{seccion_perfil}
 A continuación está el contenido completo del pliego de condiciones:
 
 ---INICIO DEL PLIEGO---
@@ -634,7 +647,14 @@ Analiza el pliego y proporciona un análisis estructurado en formato JSON con es
     "Segundo requisito clave para participar (específico del pliego)",
     "Tercer requisito clave para participar (específico del pliego)"
   ],
-  "recomendacion": "Recomendación clara sobre si vale la pena participar y por qué, basada en el contenido del pliego",
+  "viabilidad": {{
+    "veredicto": "VIABLE | VIABLE CON RIESGOS | DIFÍCIL DE CUMPLIR",
+    "tiempo_presentacion": "X días hábiles hasta el cierre — [HOLGADO | AJUSTADO | MUY AJUSTADO]",
+    "garantias": "Descripción de garantías o fianzas exigidas y si son proporcionales al monto",
+    "experiencia_previa": "Qué experiencia previa exige el pliego y si es un obstáculo",
+    "especificaciones_tecnicas": "Si las marcas, modelos o especificaciones coinciden con el perfil de la empresa"
+  }},
+  "recomendacion": "Recomendación clara sobre si vale la pena participar y por qué, considerando el perfil de la empresa y los requisitos del pliego",
   "puntuacion": 75
 }}
 
@@ -648,7 +668,8 @@ CRITERIOS PARA LA PUNTUACIÓN (0-100):
 IMPORTANTE:
 - Responde SOLO con el JSON, sin texto adicional ni markdown
 - Sé específico y práctico en cada punto basándote en el contenido real del pliego
-- Identifica detalles concretos del documento (fechas, requisitos técnicos, experiencia requerida, etc.)
+- Para la sección "viabilidad", revisa explícitamente: fechas de presentación, garantías exigidas, experiencia previa requerida, y especificaciones técnicas
+- Si el perfil de la empresa está disponible, úsalo para evaluar si las especificaciones técnicas coinciden
 - Si el pliego es muy técnico, destaca los requisitos más críticos para participar"""
 
         # 6. Llamar a Claude API
