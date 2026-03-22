@@ -515,7 +515,7 @@ Analiza el pliego y proporciona un análisis estructurado en formato JSON con es
     "Tercer requisito clave para participar (específico del pliego)"
   ],
   "viabilidad": {{
-    "veredicto": "VIABLE | VIABLE CON RIESGOS | DIFÍCIL DE CUMPLIR",
+    "veredicto": "Elige UNO: VIABLE, VIABLE CON RIESGOS, o DIFÍCIL DE CUMPLIR",
     "tiempo_presentacion": "X días hábiles hasta el cierre — [HOLGADO | AJUSTADO | MUY AJUSTADO]",
     "garantias": "Descripción de garantías o fianzas exigidas y si son proporcionales al monto",
     "experiencia_previa": "Qué experiencia previa exige el pliego y si es un obstáculo",
@@ -578,6 +578,14 @@ IMPORTANTE:
         claude_response = response.json()
         analisis_texto = claude_response['content'][0]['text']
         analisis_texto = analisis_texto.replace('```json', '').replace('```', '').strip()
+
+        # Extraer solo el bloque JSON (entre primer { y último })
+        inicio = analisis_texto.find('{')
+        fin = analisis_texto.rfind('}')
+        if inicio == -1 or fin == -1:
+            raise json.JSONDecodeError('No se encontró JSON válido', analisis_texto, 0)
+        analisis_texto = analisis_texto[inicio:fin+1]
+
         analisis = json.loads(analisis_texto)
 
         print(f"✅ Análisis completado con puntuación: {analisis.get('puntuacion', 0)}")
