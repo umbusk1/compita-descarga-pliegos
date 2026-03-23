@@ -518,13 +518,13 @@ Analiza el pliego y proporciona un análisis estructurado en formato JSON con es
     "Segundo requisito clave para participar (específico del pliego)",
     "Tercer requisito clave para participar (específico del pliego)"
   ],
-  "certificaciones_iso": {
+  "certificaciones_iso": {{
     "exige_iso": "SÍ o NO",
     "listado": [
       "ISO XXXX — descripción del requisito exacto tal como aparece en el pliego"
     ],
     "nota": "Si no exige ISO, indicar si menciona alguna norma técnica equivalente (ASTM, CLSI, CE, FDA, etc.)"
-  },
+  }},
   "tiempos": {{
     "fecha_limite_oferta": "DD/MM/YYYY — fecha límite para presentar la oferta según el pliego",
     "dias_calendario_restantes": "N días desde hoy ({fecha_hoy}) hasta la fecha límite",
