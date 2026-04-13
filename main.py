@@ -957,8 +957,8 @@ def agente_033():
 
                 # F033 Word
                 if archivo.lower().endswith(('.docx', '.doc')):
-		    if '033' in nombre:
-		        f033_bytes = zf.read(archivo)
+                    if '033' in nombre:
+                        f033_bytes = zf.read(archivo)
                         print(f"  ✅ F033 encontrado: {os.path.basename(archivo)}")
 
                 # Fichas técnicas PDF
