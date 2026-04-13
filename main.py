@@ -57,7 +57,7 @@ def verificar_archivo_en_cache(referencia):
         print(f"⚠️ Error verificando cache: {str(e)}")
         return None
 
-def descargar_pliego(referencia):
+def descargar_pliego(referencia, guardar_zip=False):
     os.makedirs(TEMP_DIR, exist_ok=True)
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
 
@@ -350,12 +350,15 @@ def descargar_pliego(referencia):
 
             print(f"📄 Documento extraído exitosamente")
 
-            try:
-                if os.path.exists(zip_path):
-                    os.remove(zip_path)
-                    print(f"🗑️ ZIP eliminado (solo guardamos el PDF)")
-            except Exception as e:
-                print(f"⚠️ Error borrando ZIP: {str(e)}")
+if not guardar_zip:
+    try:
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
+            print(f"🗑️ ZIP eliminado (solo guardamos el PDF)")
+    except Exception as e:
+        print(f"⚠️ Error borrando ZIP: {str(e)}")
+else:
+    print(f"📦 ZIP conservado: {zip_path}")
 
             browser.close()
             return documento_encontrado
