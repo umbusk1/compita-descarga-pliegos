@@ -10,6 +10,8 @@ import base64
 import json
 import requests
 import io
+from docx import Document
+from docx.shared import Pt
 from pypdf import PdfReader
 
 app = Flask(__name__)
@@ -796,17 +798,12 @@ def descargar_zip_agente033(referencia):
 # ── FUNCIÓN AUXILIAR: extrae ítems del PDF de ficha técnica con Claude ───────
 
 def extraer_items_con_claude(pdf_bytes_list, referencia):
-    """
-    Recibe una lista de PDFs (como bytes) de fichas técnicas.
-    Llama a Claude y devuelve una lista de ítems estructurados.
-    """
-    # Convertir PDFs a texto
     texto_fichas = ""
     for i, pdf_bytes in enumerate(pdf_bytes_list):
         try:
             reader = PdfReader(io.BytesIO(pdf_bytes))
-            for page in reader.pages:
-                t = page.extract_text()
+            for pg in reader.pages:
+                t = pg.extract_text()
                 if t:
                     texto_fichas += t + "\n"
         except Exception as e:
@@ -817,27 +814,24 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
 
     prompt = f"""Eres un experto en licitaciones públicas dominicanas.
 
-A continuación está el contenido de las fichas técnicas de la licitación {referencia}.
+Contenido de las fichas técnicas de la licitación {referencia}:
 
 {texto_fichas[:80000]}
 
 INSTRUCCIÓN:
-Extrae la lista de ítems que se están licitando. Para cada ítem devuelve:
-- numero: número o código del ítem (ej: 1, 2, 3 o "ITEM 01")
-- descripcion: descripción completa del bien o servicio
-- unidad: unidad de medida (ej: UD, PAQ, LB, CAJ, KG, ML, etc.)
-- cantidad: cantidad numérica solicitada
+Extrae la lista de ítems licitados. Para cada ítem devuelve:
+- numero: número del ítem
+- descripcion: descripción completa
+- unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, etc.)
+- cantidad: cantidad numérica (o null si no aparece)
 
-Responde ÚNICAMENTE con un JSON válido, sin texto adicional:
+Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {{
   "items": [
     {{"numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 10}},
     ...
   ]
-}}
-
-Si no encuentras la información de cantidad o unidad para algún ítem, usa null.
-"""
+}}"""
 
     api_key = os.environ.get('ANTHROPIC_API_KEY')
     headers = {
@@ -864,159 +858,140 @@ Si no encuentras la información de cantidad o unidad para algún ítem, usa nul
     return data.get('items', [])
 
 
-# ── FUNCIÓN AUXILIAR: llena el Word F033 con los ítems extraídos ─────────────
-
 def llenar_f033(docx_bytes, items):
-    """
-    Recibe el F033 vacío (bytes) y la lista de ítems.
-    Devuelve el F033 relleno como bytes.
-    Columnas: Item No. | Descripción | Unidad | Cantidad | Precio Unit. | ITBIS | P.U. Final
-    El agente llena cols 1-4. Cols 5-7 quedan vacías para el usuario.
-    """
     doc = Document(io.BytesIO(docx_bytes))
 
-    # Buscar la tabla principal del F033
+    # Buscar la tabla principal (la que tiene 6+ columnas)
     tabla = None
     for t in doc.tables:
-        # La tabla del F033 tiene al menos 7 columnas
         if len(t.columns) >= 6:
             tabla = t
             break
 
     if not tabla:
-        raise Exception("No se encontró la tabla del F033 en el documento Word")
+        raise Exception("No se encontró la tabla del F033 en el Word")
 
-    # Identificar la primera fila vacía de datos
-    # (saltamos las filas de encabezado)
+    # Identificar filas de datos (vacías, después del encabezado)
     filas_datos = []
     for i, row in enumerate(tabla.rows):
-        # La fila de encabezado tiene texto en celda 0 como "Item No."
-        celda0 = row.cells[0].text.strip().lower()
-        if celda0 in ['item no.', 'item', 'no.', '']:
-            if i > 0:  # Es una fila de datos vacía
-                filas_datos.append(row)
+        txt = row.cells[0].text.strip().lower()
+        # Saltar encabezados
+        if any(k in txt for k in ['item', 'no.', 'descripci', 'unidad']):
+            continue
+        # Saltar fila de total
+        if 'valor total' in row.cells[0].text.lower():
+            continue
+        filas_datos.append(row)
 
-    # Si no hay filas suficientes, agregar las que falten
+    # Agregar filas si hacen falta
     while len(filas_datos) < len(items):
-        # Copiar formato de la última fila de datos
-        nueva_fila = tabla.add_row()
-        filas_datos.append(nueva_fila)
+        filas_datos.append(tabla.add_row())
 
-    # Llenar las filas con los ítems
-    ITBIS_RATE = 0.18
-
+    # Llenar columnas 1-4
     for i, item in enumerate(items):
         if i >= len(filas_datos):
             break
-        row = filas_datos[i]
-        celdas = row.cells
+        celdas = filas_datos[i].cells
 
-        # Col 0: Item No.
-        celdas[0].paragraphs[0].clear()
-        celdas[0].paragraphs[0].add_run(str(item.get('numero', i+1))).font.size = Pt(9)
+        def set_cell(col, val):
+            try:
+                p = celdas[col].paragraphs[0]
+                p.clear()
+                run = p.add_run(str(val) if val is not None else '')
+                run.font.size = Pt(9)
+            except Exception as e:
+                print(f"⚠️ Error en celda {col}: {e}")
 
-        # Col 1: Descripción
-        celdas[1].paragraphs[0].clear()
-        celdas[1].paragraphs[0].add_run(str(item.get('descripcion', ''))).font.size = Pt(9)
+        set_cell(0, item.get('numero', i + 1))
+        set_cell(1, item.get('descripcion', ''))
+        set_cell(2, item.get('unidad', ''))
+        set_cell(3, item.get('cantidad', ''))
+        # Cols 4, 5, 6 (Precio, ITBIS, Total) — vacías para el usuario
 
-        # Col 2: Unidad de medida
-        unidad = item.get('unidad') or ''
-        celdas[2].paragraphs[0].clear()
-        celdas[2].paragraphs[0].add_run(str(unidad)).font.size = Pt(9)
-
-        # Col 3: Cantidad
-        cantidad = item.get('cantidad')
-        celdas[3].paragraphs[0].clear()
-        if cantidad is not None:
-            celdas[3].paragraphs[0].add_run(str(cantidad)).font.size = Pt(9)
-
-        # Cols 4, 5, 6 (Precio Unitario, ITBIS, PU Final) — vacías para el usuario
-        # Se dejan en blanco para que el usuario ingrese precios
-
-    # Guardar en memoria y devolver bytes
     output = io.BytesIO()
     doc.save(output)
     output.seek(0)
     return output.getvalue()
 
 
-# ── ENDPOINT PRINCIPAL: /agente-033 ─────────────────────────────────────────
-
 @app.route('/agente-033', methods=['POST'])
 def agente_033():
-    """
-    Recibe: { "referencia": "XXXX-XXX-2026-XXXX" }
-    Devuelve: el F033 en Word (.docx) pre-llenado con columnas 1-4
-    """
     try:
         data = request.get_json()
         referencia = data.get('referencia')
 
         if not referencia:
-            return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
+            return jsonify({"error": "Falta 'referencia'"}), 400
 
-        print(f"\n🤖 AGENTE 033 iniciado para: {referencia}")
+        print(f"\n🤖 AGENTE 033: {referencia}")
+        nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+        zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
 
-        # PASO 1: Descargar ZIP completo
+        # PASO 1: Descargar usando la función original (que ya funciona)
+        # pasamos guardar_zip=True para que no borre el ZIP
         print("📥 PASO 1: Descargando ZIP...")
-        zip_path = descargar_zip_agente033(referencia)
+        os.makedirs(TEMP_DIR, exist_ok=True)
 
-        # PASO 2: Extraer archivos necesarios del ZIP
-        print("📦 PASO 2: Extrayendo archivos del ZIP...")
+        zip_ya_existe = os.path.exists(zip_path) and \
+            (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
+
+        if not zip_ya_existe:
+            # Llamamos descargar_pliego con guardar_zip=True
+            descargar_pliego(referencia, guardar_zip=True)
+        else:
+            print(f"📦 ZIP en cache")
+
+        if not os.path.exists(zip_path):
+            return jsonify({"error": "No se pudo obtener el ZIP"}), 500
+
+        # PASO 2: Extraer F033 y fichas técnicas del ZIP
+        print("📦 PASO 2: Extrayendo archivos...")
         f033_bytes = None
         fichas_bytes = []
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            archivos = zf.namelist()
-            print(f"  Archivos en ZIP: {len(archivos)}")
-
-            for archivo in archivos:
+            for archivo in zf.namelist():
                 if '1_Publicaciones/Adjuntos/' not in archivo:
                     continue
-
                 nombre = os.path.basename(archivo).lower()
 
-                # Buscar el F033 Word
-                if f033_bytes is None and archivo.endswith(('.docx', '.doc')):
-                    if '033' in nombre or 'oferta' in nombre or 'economica' in nombre or 'económica' in nombre:
+                # F033 Word
+                if f033_bytes is None and archivo.lower().endswith(('.docx', '.doc')):
+                    if any(k in nombre for k in ['033', 'oferta', 'economica', 'económica']):
                         f033_bytes = zf.read(archivo)
-                        print(f"  ✅ F033 encontrado: {os.path.basename(archivo)}")
+                        print(f"  ✅ F033: {os.path.basename(archivo)}")
 
-                # Buscar fichas técnicas PDF
-                if archivo.endswith('.pdf'):
-                    if 'ficha' in nombre or 'tecnica' in nombre or 'técnica' in nombre or 'especificacion' in nombre:
+                # Fichas técnicas PDF
+                if archivo.lower().endswith('.pdf'):
+                    if any(k in nombre for k in ['ficha', 'tecnica', 'técnica', 'especificacion', 'listado']):
                         fichas_bytes.append(zf.read(archivo))
-                        print(f"  ✅ Ficha técnica: {os.path.basename(archivo)}")
+                        print(f"  ✅ Ficha: {os.path.basename(archivo)}")
 
         if not f033_bytes:
             return jsonify({
-                "error": "No se encontró el F033 en Word dentro de 1_Publicaciones/Adjuntos/. Esta licitación puede ser Comparación de Precios."
+                "error": "No se encontró el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitación puede ser Comparación de Precios."
             }), 404
 
         if not fichas_bytes:
             return jsonify({
-                "error": "No se encontraron fichas técnicas en 1_Publicaciones/Adjuntos/"
+                "error": "No se encontraron fichas técnicas PDF en 1_Publicaciones/Adjuntos/"
             }), 404
 
-        print(f"  F033: ✅ | Fichas técnicas: {len(fichas_bytes)}")
+        print(f"  F033 ✅ | Fichas: {len(fichas_bytes)}")
 
         # PASO 3: Extraer ítems con Claude
         print("🤖 PASO 3: Extrayendo ítems con Claude...")
         items = extraer_items_con_claude(fichas_bytes, referencia)
-        print(f"  ✅ {len(items)} ítems extraídos")
+        print(f"  ✅ {len(items)} ítems")
 
         if not items:
-            return jsonify({
-                "error": "Claude no pudo extraer ítems de las fichas técnicas"
-            }), 500
+            return jsonify({"error": "Claude no extrajo ítems de las fichas"}), 500
 
-        # PASO 4: Llenar el F033
-        print("📝 PASO 4: Generando Word pre-llenado...")
+        # PASO 4: Generar Word pre-llenado
+        print("📝 PASO 4: Generando F033 pre-llenado...")
         docx_relleno = llenar_f033(f033_bytes, items)
-        print(f"  ✅ Word generado ({len(docx_relleno)} bytes)")
+        print(f"  ✅ Word listo ({len(docx_relleno)} bytes)")
 
-        # PASO 5: Devolver el archivo
-        nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
         return send_file(
             io.BytesIO(docx_relleno),
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -1025,7 +1000,7 @@ def agente_033():
         )
 
     except Exception as e:
-        print(f"❌ Error en Agente 033: {str(e)}")
+        print(f"❌ Agente 033 error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
