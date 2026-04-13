@@ -348,20 +348,20 @@ def descargar_pliego(referencia, guardar_zip=False):
                 if not documento_encontrado:
                     raise Exception("No se encontró ningún documento principal en el ZIP")
 
-            print(f"📄 Documento extraído exitosamente")
+                print(f"📄 Documento extraído exitosamente")
 
-if not guardar_zip:
-    try:
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
-            print(f"🗑️ ZIP eliminado (solo guardamos el PDF)")
-    except Exception as e:
-        print(f"⚠️ Error borrando ZIP: {str(e)}")
-else:
-    print(f"📦 ZIP conservado: {zip_path}")
+                if not guardar_zip:
+                    try:
+                        if os.path.exists(zip_path):
+                            os.remove(zip_path)
+                            print(f"🗑️ ZIP eliminado (solo guardamos el PDF)")
+                    except Exception as e:
+                        print(f"⚠️ Error borrando ZIP: {str(e)}")
+                else:
+                    print(f"📦 ZIP conservado: {zip_path}")
 
-            browser.close()
-            return documento_encontrado
+                browser.close()
+                return documento_encontrado
 
         except Exception as e:
             browser.close()
