@@ -956,10 +956,10 @@ def agente_033():
                 nombre = os.path.basename(archivo).lower()
 
                 # F033 Word
-                if f033_bytes is None and archivo.lower().endswith(('.docx', '.doc')):
-                    if any(k in nombre for k in ['033', 'oferta', 'economica', 'económica']):
-                        f033_bytes = zf.read(archivo)
-                        print(f"  ✅ F033: {os.path.basename(archivo)}")
+                if archivo.lower().endswith(('.docx', '.doc')):
+		    if '033' in nombre:
+		        f033_bytes = zf.read(archivo)
+                        print(f"  ✅ F033 encontrado: {os.path.basename(archivo)}")
 
                 # Fichas técnicas PDF
                 if archivo.lower().endswith('.pdf'):
