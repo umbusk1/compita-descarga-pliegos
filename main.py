@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import base64
 import json
 import requests
+import io
 from pypdf import PdfReader
 
 app = Flask(__name__)
@@ -679,6 +680,350 @@ def cache_limpiar():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ============================================================
+# AGENTE 033 — Hojas 1, 2, 3 y 4
+# Agregar al final de main.py, antes del bloque if __name__
+# ============================================================
+
+import io
+from docx import Document
+from docx.shared import Pt
+import base64
+
+# ── FUNCIÓN AUXILIAR: descarga el ZIP completo y lo retorna como bytes ──────
+
+def descargar_zip_agente033(referencia):
+    """
+    Igual que descargar_pliego() pero retorna el ZIP en memoria
+    en vez de extraer solo el PDF principal.
+    """
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+    zip_path = f"{TEMP_DIR}/{nombre_seguro}_agente033.zip"
+
+    # Si ya está cacheado, usarlo directamente
+    if os.path.exists(zip_path):
+        edad = (time.time() - os.path.getmtime(zip_path)) / 86400
+        if edad <= CACHE_DIAS:
+            print(f"📦 ZIP en cache ({edad:.1f} días)")
+            return zip_path
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        context.set_default_timeout(120000)
+        page = context.new_page()
+
+        try:
+            # Navegar y buscar — misma lógica que descargar_pliego()
+            url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
+            page.goto(url_listado, timeout=90000)
+            page.wait_for_timeout(5000)
+
+            campo = page.locator('#txtAllWords2Search')
+            campo.wait_for(state='visible', timeout=10000)
+            campo.clear()
+            campo.fill(referencia)
+
+            try:
+                page.locator('input[type="button"][value="Buscar"]').first.click()
+            except:
+                campo.press('Enter')
+
+            page.wait_for_timeout(5000)
+
+            # Encontrar fila con la referencia
+            resultado = None
+            for xpath in [
+                f'//td[contains(text(), "{referencia}")]',
+                f'//td[text()="{referencia}"]',
+            ]:
+                try:
+                    el = page.locator(f'xpath={xpath}').first
+                    if el.is_visible(timeout=8000):
+                        resultado = el
+                        break
+                except:
+                    continue
+
+            if not resultado:
+                raise Exception(f"No se encontró {referencia} en el portal")
+
+            fila = resultado.locator('xpath=ancestor::tr')
+            boton_detalle = fila.locator('a[title="Detalle"]').first
+            boton_detalle.scroll_into_view_if_needed()
+            page.wait_for_timeout(1000)
+            boton_detalle.click()
+            page.wait_for_timeout(5000)
+
+            pages = context.pages
+            if len(pages) > 1:
+                page = pages[-1]
+
+            # Encontrar iframe con botón de descarga
+            iframe_ok = None
+            for frame in page.frames:
+                try:
+                    if frame.locator('#tbToolBar_btnTbDownload').count() > 0:
+                        iframe_ok = frame
+                        break
+                except:
+                    continue
+
+            if not iframe_ok:
+                raise Exception("No se encontró iframe con botón de descarga")
+
+            boton_dl = iframe_ok.locator('#tbToolBar_btnTbDownload').first
+
+            with page.expect_download(timeout=90000) as dl_info:
+                boton_dl.click()
+
+            download = dl_info.value
+            download.save_as(zip_path)
+            print(f"✅ ZIP descargado: {zip_path} ({os.path.getsize(zip_path)/1024/1024:.1f} MB)")
+
+            browser.close()
+            return zip_path
+
+        except Exception as e:
+            browser.close()
+            raise Exception(f"Error descargando ZIP: {str(e)}")
+
+
+# ── FUNCIÓN AUXILIAR: extrae ítems del PDF de ficha técnica con Claude ───────
+
+def extraer_items_con_claude(pdf_bytes_list, referencia):
+    """
+    Recibe una lista de PDFs (como bytes) de fichas técnicas.
+    Llama a Claude y devuelve una lista de ítems estructurados.
+    """
+    # Convertir PDFs a texto
+    texto_fichas = ""
+    for i, pdf_bytes in enumerate(pdf_bytes_list):
+        try:
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            for page in reader.pages:
+                t = page.extract_text()
+                if t:
+                    texto_fichas += t + "\n"
+        except Exception as e:
+            print(f"⚠️ Error leyendo PDF {i+1}: {e}")
+
+    if not texto_fichas.strip():
+        raise Exception("No se pudo extraer texto de las fichas técnicas")
+
+    prompt = f"""Eres un experto en licitaciones públicas dominicanas.
+
+A continuación está el contenido de las fichas técnicas de la licitación {referencia}.
+
+{texto_fichas[:80000]}
+
+INSTRUCCIÓN:
+Extrae la lista de ítems que se están licitando. Para cada ítem devuelve:
+- numero: número o código del ítem (ej: 1, 2, 3 o "ITEM 01")
+- descripcion: descripción completa del bien o servicio
+- unidad: unidad de medida (ej: UD, PAQ, LB, CAJ, KG, ML, etc.)
+- cantidad: cantidad numérica solicitada
+
+Responde ÚNICAMENTE con un JSON válido, sin texto adicional:
+{{
+  "items": [
+    {{"numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 10}},
+    ...
+  ]
+}}
+
+Si no encuentras la información de cantidad o unidad para algún ítem, usa null.
+"""
+
+    api_key = os.environ.get('ANTHROPIC_API_KEY')
+    headers = {
+        "Content-Type": "application/json",
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01"
+    }
+    payload = {
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 4000,
+        "messages": [{"role": "user", "content": prompt}]
+    }
+
+    resp = requests.post("https://api.anthropic.com/v1/messages",
+                         headers=headers, json=payload, timeout=120)
+    if resp.status_code != 200:
+        raise Exception(f"Error Claude API: {resp.status_code}")
+
+    texto = resp.json()['content'][0]['text']
+    texto = texto.replace('```json', '').replace('```', '').strip()
+    inicio = texto.find('{')
+    fin = texto.rfind('}')
+    data = json.loads(texto[inicio:fin+1])
+    return data.get('items', [])
+
+
+# ── FUNCIÓN AUXILIAR: llena el Word F033 con los ítems extraídos ─────────────
+
+def llenar_f033(docx_bytes, items):
+    """
+    Recibe el F033 vacío (bytes) y la lista de ítems.
+    Devuelve el F033 relleno como bytes.
+    Columnas: Item No. | Descripción | Unidad | Cantidad | Precio Unit. | ITBIS | P.U. Final
+    El agente llena cols 1-4. Cols 5-7 quedan vacías para el usuario.
+    """
+    doc = Document(io.BytesIO(docx_bytes))
+
+    # Buscar la tabla principal del F033
+    tabla = None
+    for t in doc.tables:
+        # La tabla del F033 tiene al menos 7 columnas
+        if len(t.columns) >= 6:
+            tabla = t
+            break
+
+    if not tabla:
+        raise Exception("No se encontró la tabla del F033 en el documento Word")
+
+    # Identificar la primera fila vacía de datos
+    # (saltamos las filas de encabezado)
+    filas_datos = []
+    for i, row in enumerate(tabla.rows):
+        # La fila de encabezado tiene texto en celda 0 como "Item No."
+        celda0 = row.cells[0].text.strip().lower()
+        if celda0 in ['item no.', 'item', 'no.', '']:
+            if i > 0:  # Es una fila de datos vacía
+                filas_datos.append(row)
+
+    # Si no hay filas suficientes, agregar las que falten
+    while len(filas_datos) < len(items):
+        # Copiar formato de la última fila de datos
+        nueva_fila = tabla.add_row()
+        filas_datos.append(nueva_fila)
+
+    # Llenar las filas con los ítems
+    ITBIS_RATE = 0.18
+
+    for i, item in enumerate(items):
+        if i >= len(filas_datos):
+            break
+        row = filas_datos[i]
+        celdas = row.cells
+
+        # Col 0: Item No.
+        celdas[0].paragraphs[0].clear()
+        celdas[0].paragraphs[0].add_run(str(item.get('numero', i+1))).font.size = Pt(9)
+
+        # Col 1: Descripción
+        celdas[1].paragraphs[0].clear()
+        celdas[1].paragraphs[0].add_run(str(item.get('descripcion', ''))).font.size = Pt(9)
+
+        # Col 2: Unidad de medida
+        unidad = item.get('unidad') or ''
+        celdas[2].paragraphs[0].clear()
+        celdas[2].paragraphs[0].add_run(str(unidad)).font.size = Pt(9)
+
+        # Col 3: Cantidad
+        cantidad = item.get('cantidad')
+        celdas[3].paragraphs[0].clear()
+        if cantidad is not None:
+            celdas[3].paragraphs[0].add_run(str(cantidad)).font.size = Pt(9)
+
+        # Cols 4, 5, 6 (Precio Unitario, ITBIS, PU Final) — vacías para el usuario
+        # Se dejan en blanco para que el usuario ingrese precios
+
+    # Guardar en memoria y devolver bytes
+    output = io.BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output.getvalue()
+
+
+# ── ENDPOINT PRINCIPAL: /agente-033 ─────────────────────────────────────────
+
+@app.route('/agente-033', methods=['POST'])
+def agente_033():
+    """
+    Recibe: { "referencia": "XXXX-XXX-2026-XXXX" }
+    Devuelve: el F033 en Word (.docx) pre-llenado con columnas 1-4
+    """
+    try:
+        data = request.get_json()
+        referencia = data.get('referencia')
+
+        if not referencia:
+            return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
+
+        print(f"\n🤖 AGENTE 033 iniciado para: {referencia}")
+
+        # PASO 1: Descargar ZIP completo
+        print("📥 PASO 1: Descargando ZIP...")
+        zip_path = descargar_zip_agente033(referencia)
+
+        # PASO 2: Extraer archivos necesarios del ZIP
+        print("📦 PASO 2: Extrayendo archivos del ZIP...")
+        f033_bytes = None
+        fichas_bytes = []
+
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            archivos = zf.namelist()
+            print(f"  Archivos en ZIP: {len(archivos)}")
+
+            for archivo in archivos:
+                if '1_Publicaciones/Adjuntos/' not in archivo:
+                    continue
+
+                nombre = os.path.basename(archivo).lower()
+
+                # Buscar el F033 Word
+                if f033_bytes is None and archivo.endswith(('.docx', '.doc')):
+                    if '033' in nombre or 'oferta' in nombre or 'economica' in nombre or 'económica' in nombre:
+                        f033_bytes = zf.read(archivo)
+                        print(f"  ✅ F033 encontrado: {os.path.basename(archivo)}")
+
+                # Buscar fichas técnicas PDF
+                if archivo.endswith('.pdf'):
+                    if 'ficha' in nombre or 'tecnica' in nombre or 'técnica' in nombre or 'especificacion' in nombre:
+                        fichas_bytes.append(zf.read(archivo))
+                        print(f"  ✅ Ficha técnica: {os.path.basename(archivo)}")
+
+        if not f033_bytes:
+            return jsonify({
+                "error": "No se encontró el F033 en Word dentro de 1_Publicaciones/Adjuntos/. Esta licitación puede ser Comparación de Precios."
+            }), 404
+
+        if not fichas_bytes:
+            return jsonify({
+                "error": "No se encontraron fichas técnicas en 1_Publicaciones/Adjuntos/"
+            }), 404
+
+        print(f"  F033: ✅ | Fichas técnicas: {len(fichas_bytes)}")
+
+        # PASO 3: Extraer ítems con Claude
+        print("🤖 PASO 3: Extrayendo ítems con Claude...")
+        items = extraer_items_con_claude(fichas_bytes, referencia)
+        print(f"  ✅ {len(items)} ítems extraídos")
+
+        if not items:
+            return jsonify({
+                "error": "Claude no pudo extraer ítems de las fichas técnicas"
+            }), 500
+
+        # PASO 4: Llenar el F033
+        print("📝 PASO 4: Generando Word pre-llenado...")
+        docx_relleno = llenar_f033(f033_bytes, items)
+        print(f"  ✅ Word generado ({len(docx_relleno)} bytes)")
+
+        # PASO 5: Devolver el archivo
+        nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+        return send_file(
+            io.BytesIO(docx_relleno),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            as_attachment=True,
+            download_name=f"F033_{nombre_seguro}.docx"
+        )
+
+    except Exception as e:
+        print(f"❌ Error en Agente 033: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
