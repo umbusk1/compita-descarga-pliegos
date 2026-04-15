@@ -798,32 +798,38 @@ def descargar_zip_agente033(referencia):
 # ── FUNCIÓN AUXILIAR: extrae ítems del PDF de ficha técnica con Claude ───────
 
 def extraer_items_con_claude(pdf_bytes_list, referencia):
-    texto_fichas = ""
-    for i, pdf_bytes in enumerate(pdf_bytes_list):
+
+    def extraer_de_un_pdf(pdf_bytes, indice):
+        """Extrae texto de un PDF y llama a Claude para obtener sus ítems."""
         try:
             reader = PdfReader(io.BytesIO(pdf_bytes))
+            texto = ""
             for pg in reader.pages:
                 t = pg.extract_text()
                 if t:
-                    texto_fichas += t + "\n"
+                    texto += t + "\n"
         except Exception as e:
-            print(f"⚠️ Error leyendo PDF {i+1}: {e}")
+            print(f"⚠️ Error leyendo PDF {indice + 1}: {e}")
+            return []
 
-    if not texto_fichas.strip():
-        raise Exception("No se pudo extraer texto de las fichas técnicas")
+        if not texto.strip():
+            print(f"⚠️ PDF {indice + 1} sin texto extraíble — omitido")
+            return []
 
-    prompt = f"""Eres un experto en licitaciones públicas dominicanas.
+        prompt = f"""Eres un experto en licitaciones públicas dominicanas.
 
-Contenido de las fichas técnicas de la licitación {referencia}:
+Contenido de un documento de la licitación {referencia} (documento {indice + 1}):
 
-{texto_fichas[:80000]}
+{texto[:120000]}
 
 INSTRUCCIÓN:
-Extrae la lista de ítems licitados. Para cada ítem devuelve:
+Extrae la lista de ítems licitados que aparecen en ESTE documento. Para cada ítem devuelve:
 - numero: número del ítem
 - descripcion: descripción completa
 - unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, etc.)
 - cantidad: cantidad numérica (o null si no aparece)
+
+Si este documento no contiene ítems licitados, devuelve una lista vacía.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {{
@@ -833,29 +839,57 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
   ]
 }}"""
 
-    api_key = os.environ.get('ANTHROPIC_API_KEY')
-    headers = {
-        "Content-Type": "application/json",
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01"
-    }
-    payload = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 4000,
-        "messages": [{"role": "user", "content": prompt}]
-    }
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+        payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 4000,
+            "messages": [{"role": "user", "content": prompt}]
+        }
 
-    resp = requests.post("https://api.anthropic.com/v1/messages",
-                         headers=headers, json=payload, timeout=120)
-    if resp.status_code != 200:
-        raise Exception(f"Error Claude API: {resp.status_code}")
+        resp = requests.post("https://api.anthropic.com/v1/messages",
+                             headers=headers, json=payload, timeout=120)
+        if resp.status_code != 200:
+            print(f"⚠️ Error Claude API en PDF {indice + 1}: {resp.status_code}")
+            return []
 
-    texto = resp.json()['content'][0]['text']
-    texto = texto.replace('```json', '').replace('```', '').strip()
-    inicio = texto.find('{')
-    fin = texto.rfind('}')
-    data = json.loads(texto[inicio:fin+1])
-    return data.get('items', [])
+        texto_resp = resp.json()['content'][0]['text']
+        texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
+        inicio = texto_resp.find('{')
+        fin = texto_resp.rfind('}')
+        if inicio == -1 or fin == -1:
+            return []
+        data = json.loads(texto_resp[inicio:fin + 1])
+        return data.get('items', [])
+
+    # ── Procesar cada PDF por separado y fusionar ────────────────────────────
+    todos_items = {}  # clave: numero (str), para deduplicar
+
+    for i, pdf_bytes in enumerate(pdf_bytes_list):
+        print(f"  🤖 Procesando PDF {i + 1}/{len(pdf_bytes_list)} con Claude...")
+        items_pdf = extraer_de_un_pdf(pdf_bytes, i)
+        print(f"     → {len(items_pdf)} ítems encontrados")
+
+        for item in items_pdf:
+            num = str(item.get('numero', '')).strip()
+            if not num:
+                continue
+            # Si el ítem ya existe pero sin descripción, el nuevo lo reemplaza
+            if num not in todos_items or not todos_items[num].get('descripcion'):
+                todos_items[num] = item
+
+    # ── Ordenar por número y devolver lista final ────────────────────────────
+    def clave_orden(item):
+        try:
+            return int(item.get('numero', 0))
+        except (ValueError, TypeError):
+            return 9999
+
+    return sorted(todos_items.values(), key=clave_orden)
 
 
 def llenar_f033(docx_bytes, items):
