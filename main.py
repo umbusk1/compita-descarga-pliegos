@@ -823,13 +823,15 @@ Contenido de un documento de la licitación {referencia} (documento {indice + 1}
 {texto[:120000]}
 
 INSTRUCCIÓN:
-Extrae la lista de ítems licitados que aparecen en ESTE documento. Para cada ítem devuelve:
-- numero: número del ítem
-- descripcion: descripción completa
-- unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, etc.)
+Extrae TODOS los ítems, productos, equipos o materiales que aparecen en ESTE documento.
+Pueden estar en tablas, listas numeradas, fichas técnicas, listados de equipos o especificaciones.
+Para cada ítem devuelve:
+- numero: número o posición del ítem (si no tiene número, usa orden secuencial)
+- descripcion: descripción completa del producto o equipo
+- unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, C/U, etc.)
 - cantidad: cantidad numérica (o null si no aparece)
 
-Si este documento no contiene ítems licitados, devuelve una lista vacía.
+Si este documento no contiene ningún producto, equipo o material, devuelve lista vacía.
 
 Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {{
@@ -847,7 +849,7 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         }
         payload = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 4000,
+            "max_tokens": 8000,
             "messages": [{"role": "user", "content": prompt}]
         }
 
