@@ -13,6 +13,7 @@ import io
 from docx import Document
 from docx.shared import Pt
 from pypdf import PdfReader
+from json_repair import repair_json
 
 app = Flask(__name__)
 CORS(app, origins=["https://compita.umbusk.com"])
@@ -865,7 +866,13 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         fin = texto_resp.rfind('}')
         if inicio == -1 or fin == -1:
             return []
-        data = json.loads(texto_resp[inicio:fin + 1])
+        json_raw = texto_resp[inicio:fin + 1]
+        try:
+            data = json.loads(json_raw)
+        except json.JSONDecodeError:
+            print(f"  ⚠️ JSON malformado en PDF {indice + 1}, aplicando reparación...")
+            json_reparado = repair_json(json_raw)
+            data = json.loads(json_reparado)
         return data.get('items', [])
 
     # ── Procesar cada PDF por separado y fusionar ────────────────────────────
