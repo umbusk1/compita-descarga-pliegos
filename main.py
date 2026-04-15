@@ -293,7 +293,7 @@ def descargar_pliego(referencia, guardar_zip=False):
                 raise Exception("No se encontró el botón de descarga")
 
             print(f"💾 Iniciando descarga...")
-            with page.expect_download(timeout=90000) as download_info:
+            with context.expect_download(timeout=90000) as download_info:
                 boton_descarga.click()
 
             download = download_info.value
