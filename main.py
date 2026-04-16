@@ -887,7 +887,7 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
                 from json_repair import repair_json
                 json_reparado = repair_json(json_raw)
                 data = json.loads(json_reparado)
-        return data.get('items', [])
+            return data.get('items', [])
 
     # ── Procesar cada PDF por separado y fusionar ────────────────────────────
     todos_items = {}  # clave: "LOTE-numero"
