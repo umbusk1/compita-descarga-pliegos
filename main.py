@@ -826,6 +826,9 @@ Contenido de un documento de la licitación {referencia} (documento {indice + 1}
 INSTRUCCIÓN:
 Extrae TODOS los ítems, productos, equipos o materiales que aparecen en ESTE documento.
 Pueden estar organizados en LOTES (LOTE I, LOTE II, LOTE III, etc.).
+IMPORTANTE: identifica correctamente el lote de cada ítem según los encabezados
+"LOTE- I", "LOTE- II", "LOTE- III" que aparecen en el documento.
+No asumas que todos los ítems son del mismo lote.
 Para cada ítem devuelve:
 - lote: nombre del lote al que pertenece (ej: "I", "II", "III"). Si no hay lotes, usa "I".
 - numero: número del ítem dentro de su lote
@@ -852,7 +855,7 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         }
         payload = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 8000,
+            "max_tokens": 16000,
             "messages": [{"role": "user", "content": prompt}]
         }
 
@@ -979,7 +982,7 @@ def llenar_f033(docx_bytes, items):
         # Número de ítem: incluir referencia al lote si hay más de un lote
         lote = str(item.get('lote', '')).strip()
         num  = item.get('numero', i + 1)
-        etiqueta_num = f"L{lote}-{num}" if lote and lote != 'I' else str(num)
+        etiqueta_num = f"L-{lote}-{num}" if lote else str(num)
 
         set_cell(0, etiqueta_num)
         set_cell(1, item.get('descripcion', ''))
