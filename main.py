@@ -825,11 +825,12 @@ Contenido de un documento de la licitación {referencia} (documento {indice + 1}
 
 INSTRUCCIÓN:
 Extrae TODOS los ítems, productos, equipos o materiales que aparecen en ESTE documento.
-Pueden estar en tablas, listas numeradas, fichas técnicas, listados de equipos o especificaciones.
+Pueden estar organizados en LOTES (LOTE I, LOTE II, LOTE III, etc.).
 Para cada ítem devuelve:
-- numero: número o posición del ítem (si no tiene número, usa orden secuencial)
-- descripcion: descripción completa del producto o equipo
-- unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, C/U, etc.)
+- lote: nombre del lote al que pertenece (ej: "I", "II", "III"). Si no hay lotes, usa "I".
+- numero: número del ítem dentro de su lote
+- descripcion: descripción completa del producto o equipo (incluye marca y modelo si aparecen)
+- unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, C/U, SVC, etc.)
 - cantidad: cantidad numérica (o null si no aparece)
 
 Si este documento no contiene ningún producto, equipo o material, devuelve lista vacía.
@@ -837,7 +838,8 @@ Si este documento no contiene ningún producto, equipo o material, devuelve list
 Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {{
   "items": [
-    {{"numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 10}},
+    {{"lote": "I", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
+    {{"lote": "II", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
     ...
   ]
 }}"""
@@ -876,7 +878,7 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         return data.get('items', [])
 
     # ── Procesar cada PDF por separado y fusionar ────────────────────────────
-    todos_items = {}  # clave: numero (str), para deduplicar
+    todos_items = {}  # clave: "LOTE-numero", para deduplicar respetando lotes
 
     for i, pdf_bytes in enumerate(pdf_bytes_list):
         print(f"  🤖 Procesando PDF {i + 1}/{len(pdf_bytes_list)} con Claude...")
@@ -884,27 +886,30 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         print(f"     → {len(items_pdf)} ítems encontrados")
 
         for item in items_pdf:
-            num = str(item.get('numero', '')).strip()
+            lote = str(item.get('lote', 'I')).strip().upper()
+            num  = str(item.get('numero', '')).strip()
             if not num:
                 continue
-            # Si el ítem ya existe pero sin descripción, el nuevo lo reemplaza
-            if num not in todos_items or not todos_items[num].get('descripcion'):
-                todos_items[num] = item
+            clave = f"{lote}-{num}"
+            if clave not in todos_items or not todos_items[clave].get('descripcion'):
+                todos_items[clave] = item
 
-    # ── Ordenar por número y devolver lista final ────────────────────────────
     def clave_orden(item):
+        orden_lote = {'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5}
+        lote = str(item.get('lote', 'I')).strip().upper()
         try:
-            return int(item.get('numero', 0))
+            num = int(item.get('numero', 0))
         except (ValueError, TypeError):
-            return 9999
+            num = 9999
+        return (orden_lote.get(lote, 99), num)
 
     return sorted(todos_items.values(), key=clave_orden)
 
 
 def llenar_f033(docx_bytes, items):
-    doc = Document(io.BytesIO(docx_bytes))
+    from copy import deepcopy
 
-    # Buscar la tabla principal (la que tiene 6+ columnas)
+    doc   = Document(io.BytesIO(docx_bytes))
     tabla = None
     for t in doc.tables:
         if len(t.columns) >= 6:
@@ -914,23 +919,49 @@ def llenar_f033(docx_bytes, items):
     if not tabla:
         raise Exception("No se encontró la tabla del F033 en el Word")
 
-    # Identificar filas de datos (vacías, después del encabezado)
-    filas_datos = []
-    for i, row in enumerate(tabla.rows):
+    # ── Identificar filas de encabezado, datos y VALOR TOTAL ─────────────────
+    filas_datos  = []
+    fila_total   = None
+    fila_template = None  # última fila de datos real (para clonar)
+
+    for row in tabla.rows:
         txt = row.cells[0].text.strip().lower()
-        # Saltar encabezados
         if any(k in txt for k in ['item', 'no.', 'descripci', 'unidad']):
             continue
-        # Saltar fila de total
         if 'valor total' in row.cells[0].text.lower():
+            fila_total = row
             continue
         filas_datos.append(row)
+        fila_template = row  # la última fila de datos sirve de plantilla
 
-    # Agregar filas si hacen falta
-    while len(filas_datos) < len(items):
-        filas_datos.append(tabla.add_row())
+    # ── Insertar filas nuevas ANTES de VALOR TOTAL si hacen falta ────────────
+    if len(filas_datos) < len(items):
+        if fila_total and fila_template:
+            faltan = len(items) - len(filas_datos)
+            for _ in range(faltan):
+                nueva_tr = deepcopy(fila_template._tr)
+                # Limpiar contenido de las celdas clonadas
+                for tc in nueva_tr.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tc'):
+                    for p in tc.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'):
+                        for r in p.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r'):
+                            p.remove(r)
+                fila_total._tr.addprevious(nueva_tr)
+            # Reconstruir lista de filas de datos (excluye encabezados y VALOR TOTAL)
+            filas_datos = []
+            for row in tabla.rows:
+                txt = row.cells[0].text.strip().lower()
+                if any(k in txt for k in ['item', 'no.', 'descripci', 'unidad']):
+                    continue
+                if 'valor total' in row.cells[0].text.lower():
+                    break
+                filas_datos.append(row)
+        else:
+            # Sin fila de total: agregar al final
+            while len(filas_datos) < len(items):
+                filas_datos.append(tabla.add_row())
 
-    # Llenar columnas 1-4
+    # ── Llenar columnas 0–3 (Ítem, Descripción, Unidad, Cantidad) ────────────
+    lote_actual = None
     for i, item in enumerate(items):
         if i >= len(filas_datos):
             break
@@ -945,17 +976,20 @@ def llenar_f033(docx_bytes, items):
             except Exception as e:
                 print(f"⚠️ Error en celda {col}: {e}")
 
-        set_cell(0, item.get('numero', i + 1))
+        # Número de ítem: incluir referencia al lote si hay más de un lote
+        lote = str(item.get('lote', '')).strip()
+        num  = item.get('numero', i + 1)
+        etiqueta_num = f"L{lote}-{num}" if lote and lote != 'I' else str(num)
+
+        set_cell(0, etiqueta_num)
         set_cell(1, item.get('descripcion', ''))
         set_cell(2, item.get('unidad', ''))
         set_cell(3, item.get('cantidad', ''))
-        # Cols 4, 5, 6 (Precio, ITBIS, Total) — vacías para el usuario
 
     output = io.BytesIO()
     doc.save(output)
     output.seek(0)
     return output.getvalue()
-
 
 @app.route('/agente-033', methods=['POST'])
 def agente_033():
