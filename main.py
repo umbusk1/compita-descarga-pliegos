@@ -663,23 +663,23 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
                     paginas_sin_texto += 1
                     continue
 
-            # Caso 2: PDF solo de imagenes (todas las paginas sin texto)
+            # Caso 2: PDF solo de imagenes
             total_paginas = len(reader.pages)
             if total_paginas > 0 and paginas_sin_texto == total_paginas:
-                print(f"PDF {indice + 1} parece ser solo imagenes escaneadas ({total_paginas} paginas sin texto) - omitido")
+                print(f"PDF {indice + 1} parece ser solo imagenes ({total_paginas} paginas sin texto) - omitido")
                 return []
 
-            # Caso 3: texto parcialmente extraible (advertencia informativa)
+            # Caso 3: texto parcialmente extraible
             if paginas_sin_texto > 0:
-                print(f"PDF {indice + 1}: {paginas_sin_texto} de {total_paginas} paginas sin texto extraible")
+                print(f"PDF {indice + 1}: {paginas_sin_texto} de {total_paginas} paginas sin texto")
 
         except Exception as e:
-            # Caso 4: PDF corrupto u otro error de lectura
+            # Caso 4: PDF corrupto u otro error
             msg = str(e).lower()
             if 'password' in msg or 'encrypt' in msg:
                 print(f"PDF {indice + 1} requiere contrasena - omitido")
             elif 'eof' in msg or 'invalid' in msg or 'corrupt' in msg:
-                print(f"PDF {indice + 1} parece estar corrupto o mal formado - omitido")
+                print(f"PDF {indice + 1} parece estar corrupto - omitido")
             else:
                 print(f"Error leyendo PDF {indice + 1}: {e}")
             return []
@@ -698,7 +698,7 @@ asigna los items al lote donde corresponde segun la numeracion que continua.
         else:
             contexto_str = ""
 
-        prompt = f"""Eres un experto en licitaciones publicas dominicanas.
+        prompt = f"""Eres un experto en licitaciones publicas dominicanas y tributacion del ITBIS.
 {contexto_str}
 Contenido de un documento de la licitacion {referencia} (documento {indice + 1}):
 
@@ -711,20 +711,33 @@ IMPORTANTE: identifica correctamente el lote de cada item segun los encabezados
 "LOTE- I", "LOTE- II", "LOTE- III" que aparecen en el documento.
 No asumas que todos los items son del mismo lote.
 
+Ademas, determina la politica de ITBIS de esta licitacion:
+- "TRANSPARENTADO": el pliego pide que el ITBIS se declare por separado
+- "INCLUIDO": el pliego indica que los precios deben incluir todos los impuestos
+- "EXENTO": el pliego declara que esta contratacion esta exenta de ITBIS
+- "NO_ESPECIFICADO": el pliego no menciona nada sobre ITBIS
+
+Para cada item, determina si aplica ITBIS segun la ley dominicana:
+- itbis_aplica: false si el item es medicamento, reactivo de laboratorio, equipo medico
+  de la lista oficial, sangre o derivados, insumos medicos de la canasta basica, o si
+  la politica es EXENTO. En todos los demas casos, itbis_aplica: true.
+
 Para cada item devuelve:
 - lote: numero romano del lote (ej: "I", "II", "III"). Si no hay lotes, usa "I".
 - numero: numero del item dentro de su lote
 - descripcion: descripcion completa (incluye marca y modelo si aparecen)
 - unidad: unidad de medida (UD, SVC, PAQ, KG, etc.)
 - cantidad: cantidad numerica (o null si no aparece)
+- itbis_aplica: true o false segun las reglas anteriores
 
 Si este documento no contiene ningun producto, equipo o material, devuelve lista vacia.
 
 Responde UNICAMENTE con JSON valido, sin texto adicional:
 {{
+  "politica_itbis": "TRANSPARENTADO",
   "items": [
-    {{"lote": "I", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
-    {{"lote": "II", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}}
+    {{"lote": "I", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1, "itbis_aplica": true}},
+    {{"lote": "II", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1, "itbis_aplica": false}}
   ]
 }}"""
 
@@ -763,7 +776,16 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
             print(f"JSON malformado en PDF {indice + 1}, aplicando reparacion...")
             json_reparado = repair_json(json_raw)
             data = json.loads(json_reparado)
-        return data.get('items', [])
+
+        politica = data.get('politica_itbis', 'NO_ESPECIFICADO')
+        items_pdf = data.get('items', [])
+
+        # Inyectar politica_itbis en cada item para que llegue a llenar_f033()
+        for item in items_pdf:
+            item['politica_itbis'] = politica
+
+        print(f"  Politica ITBIS detectada: {politica}")
+        return items_pdf
 
     todos_items = {}
     contexto_previo = ""
@@ -856,6 +878,15 @@ def llenar_f033(docx_bytes, items):
             while len(filas_datos) < len(items):
                 filas_datos.append(tabla.add_row())
 
+    # Determinar politica global de ITBIS desde el primer item que la tenga
+    politica_global = 'NO_ESPECIFICADO'
+    for item in items:
+        p = item.get('politica_itbis', '')
+        if p:
+            politica_global = p
+            break
+    print(f"  Politica ITBIS para Word: {politica_global}")
+
     for i, item in enumerate(items):
         if i >= len(filas_datos):
             break
@@ -878,6 +909,21 @@ def llenar_f033(docx_bytes, items):
         set_cell(1, item.get('descripcion', ''))
         set_cell(2, item.get('unidad', ''))
         set_cell(3, item.get('cantidad', ''))
+        # Col 4 (Precio Unitario) vacia — la llena el usuario
+
+        # Col 5: ITBIS pre-marcado segun politica del pliego y tipo de item
+        if len(celdas) > 5:
+            itbis_aplica = item.get('itbis_aplica', True)
+            if politica_global == 'EXENTO':
+                valor_itbis = '0%'
+            elif politica_global == 'INCLUIDO':
+                valor_itbis = 'Incluido'
+            elif politica_global == 'TRANSPARENTADO':
+                valor_itbis = '18%' if itbis_aplica else '0%'
+            else:
+                # NO_ESPECIFICADO: aplicar regla de ley por item
+                valor_itbis = '18%' if itbis_aplica else '0%'
+            set_cell(5, valor_itbis)
 
     output = io.BytesIO()
     doc.save(output)
@@ -948,7 +994,7 @@ def agente_033():
                 "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitacion puede ser Comparacion de Precios."
             }), 404
 
-        # Construir candidatos en orden: pliego > ficha tecnica > listado
+        # Candidatos en orden: pliego > ficha tecnica > listado
         candidatos = []
         if fichas_pliego:
             candidatos.append(('pliego', fichas_pliego))
