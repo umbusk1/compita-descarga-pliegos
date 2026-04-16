@@ -964,8 +964,32 @@ def agente_033():
         fichas_pliego = []
         fichas_secundarias = []
 
-        with zipfile.ZipFile(zip_path, 'r') as zf:
-            for archivo in zf.namelist():
+        try:
+            zf_handle = zipfile.ZipFile(zip_path, 'r')
+        except zipfile.BadZipFile:
+            return jsonify({
+                "error": "El archivo descargado del SECP esta corrupto o incompleto. Intenta de nuevo."
+            }), 500
+        except Exception as e:
+            return jsonify({
+                "error": f"No se pudo abrir el archivo ZIP: {str(e)}"
+            }), 500
+
+        with zf_handle as zf:
+            archivos = zf.namelist()
+
+            if not archivos:
+                return jsonify({
+                    "error": "El ZIP descargado esta vacio."
+                }), 500
+
+            tiene_adjuntos = any('1_Publicaciones/Adjuntos/' in a for a in archivos)
+            if not tiene_adjuntos:
+                return jsonify({
+                    "error": "El ZIP no contiene la carpeta 1_Publicaciones/Adjuntos/. La estructura del expediente es diferente a la esperada."
+                }), 500
+
+            for archivo in archivos:
                 if '1_Publicaciones/Adjuntos/' not in archivo:
                     continue
                 nombre = os.path.basename(archivo).lower()
