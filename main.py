@@ -1050,7 +1050,9 @@ def agente_033():
         # PASO 2: Extraer F033 y fichas técnicas del ZIP
         print("📦 PASO 2: Extrayendo archivos...")
         f033_bytes = None
-        fichas_bytes = []
+        fichas_prioritarias  = []   # fichas técnicas con estructura de lotes
+        fichas_pliego        = []   # pliegos de condiciones
+        fichas_secundarias   = []   # listados, cronogramas, etc.
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             for archivo in zf.namelist():
@@ -1066,9 +1068,35 @@ def agente_033():
 
                 # Fichas técnicas PDF
                 if archivo.lower().endswith('.pdf'):
-                    if any(k in nombre for k in ['ficha', 'tecnica', 'técnica', 'especificacion', 'listado']):
-                        fichas_bytes.append(zf.read(archivo))
-                        print(f"  ✅ Ficha: {os.path.basename(archivo)}")
+                    es_ficha   = any(k in nombre for k in ['ficha', 'tecnica', 'técnica'])
+                    es_pliego  = any(k in nombre for k in ['pliego', 'condiciones', 'terminos', 'términos'])
+                    es_listado = any(k in nombre for k in ['listado', 'especificacion', 'especificación'])
+                    if es_ficha:
+                        fichas_prioritarias.append(zf.read(archivo))
+                        print(f"  ✅ Ficha técnica: {os.path.basename(archivo)}")
+                    elif es_pliego:
+                        fichas_pliego.append(zf.read(archivo))
+                        print(f"  📄 Pliego: {os.path.basename(archivo)}")
+                    elif es_listado:
+                        fichas_secundarias.append(zf.read(archivo))
+                        print(f"  📋 Listado (secundario): {os.path.basename(archivo)}")
+
+        if not f033_bytes:
+            return jsonify({
+                "error": "No se encontró el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitación puede ser Comparación de Precios."
+            }), 404
+
+        if fichas_prioritarias:
+            fichas_bytes = fichas_prioritarias
+            print(f"  📌 Usando ficha(s) técnica(s): {len(fichas_bytes)} archivo(s)")
+	        elif fichas_pliego:
+            fichas_bytes = fichas_pliego
+            print(f"  📌 Sin ficha técnica, usando pliego: {len(fichas_bytes)} archivo(s)")
+        elif fichas_secundarias:
+            fichas_bytes = fichas_secundarias
+            print(f"  📌 Sin ficha ni pliego, usando listado: {len(fichas_bytes)} archivo(s)")
+        else:
+            fichas_bytes = []
 
         if not f033_bytes:
             return jsonify({
@@ -1077,10 +1105,10 @@ def agente_033():
 
         if not fichas_bytes:
             return jsonify({
-                "error": "No se encontraron fichas técnicas PDF en 1_Publicaciones/Adjuntos/"
+                "error": "No es posible procesar el F033 porque no se encontraron los PDFs básicos (ficha técnica o listado de ítems) en 1_Publicaciones/Adjuntos/."
             }), 404
 
-        print(f"  F033 ✅ | Fichas: {len(fichas_bytes)}")
+        print(f"  F033 ✅ | Fichas a procesar: {len(fichas_bytes)}")
 
         # PASO 3: Extraer ítems con Claude
         print("🤖 PASO 3: Extrayendo ítems con Claude...")
