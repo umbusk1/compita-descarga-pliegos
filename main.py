@@ -14,13 +14,14 @@ from docx import Document
 from docx.shared import Pt
 from pypdf import PdfReader
 from json_repair import repair_json
+from copy import deepcopy
 
 app = Flask(__name__)
 CORS(app, origins=["https://compita.umbusk.com"])
 
-# Ruta donde se guardarán los archivos (persistentes por 30 días)
 TEMP_DIR = "/tmp/descargas"
-CACHE_DIAS = 30  # Días para mantener archivos en cache
+CACHE_DIAS = 30
+
 
 def limpiar_archivos_viejos():
     try:
@@ -36,13 +37,14 @@ def limpiar_archivos_viejos():
                 try:
                     os.remove(ruta_completa)
                     archivos_borrados += 1
-                    print(f"🗑️ Borrado: {archivo} (edad: {edad_dias:.1f} días)")
+                    print(f"Borrado: {archivo} (edad: {edad_dias:.1f} dias)")
                 except Exception as e:
-                    print(f"⚠️ Error borrando {archivo}: {str(e)}")
+                    print(f"Error borrando {archivo}: {str(e)}")
         if archivos_borrados > 0:
-            print(f"✅ Limpieza completada: {archivos_borrados} archivos borrados")
+            print(f"Limpieza completada: {archivos_borrados} archivos borrados")
     except Exception as e:
-        print(f"⚠️ Error en limpieza automática: {str(e)}")
+        print(f"Error en limpieza automatica: {str(e)}")
+
 
 def verificar_archivo_en_cache(referencia):
     try:
@@ -53,12 +55,13 @@ def verificar_archivo_en_cache(referencia):
                 edad_segundos = time.time() - os.path.getmtime(ruta_completa)
                 edad_dias = edad_segundos / (60 * 60 * 24)
                 if edad_dias <= CACHE_DIAS:
-                    print(f"📦 Archivo en cache encontrado (edad: {edad_dias:.1f} días)")
+                    print(f"Archivo en cache encontrado (edad: {edad_dias:.1f} dias)")
                     return ruta_completa
         return None
     except Exception as e:
-        print(f"⚠️ Error verificando cache: {str(e)}")
+        print(f"Error verificando cache: {str(e)}")
         return None
+
 
 def descargar_pliego(referencia, guardar_zip=False):
     os.makedirs(TEMP_DIR, exist_ok=True)
@@ -66,26 +69,26 @@ def descargar_pliego(referencia, guardar_zip=False):
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        context = browser.new_context(accept_downloads=True)
         context.set_default_timeout(120000)
         page = context.new_page()
 
         try:
-            print(f"🔍 Buscando licitación: {referencia}")
-            print(f"📋 Navegando al portal...")
+            print(f"Buscando licitacion: {referencia}")
+            print(f"Navegando al portal...")
             url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
             page.goto(url_listado, timeout=90000)
             page.wait_for_timeout(5000)
-            print(f"✅ Portal cargado")
+            print(f"Portal cargado")
 
-            print(f"✍️ Escribiendo en el buscador...")
+            print(f"Escribiendo en el buscador...")
             campo_busqueda = page.locator('#txtAllWords2Search')
             campo_busqueda.wait_for(state='visible', timeout=10000)
             campo_busqueda.clear()
             campo_busqueda.fill(referencia)
-            print(f"✅ Referencia ingresada: {referencia}")
+            print(f"Referencia ingresada: {referencia}")
 
-            print(f"🔎 Buscando el botón azul 'Buscar'...")
+            print(f"Buscando boton Buscar...")
             boton_encontrado = False
 
             try:
@@ -93,7 +96,7 @@ def descargar_pliego(referencia, guardar_zip=False):
                 if boton_buscar.is_visible(timeout=5000):
                     boton_buscar.click()
                     boton_encontrado = True
-                    print(f"✅ Clic en botón azul (Opción 1)")
+                    print(f"Clic en boton azul (Opcion 1)")
             except:
                 pass
 
@@ -103,7 +106,7 @@ def descargar_pliego(referencia, guardar_zip=False):
                     if boton_buscar.is_visible(timeout=5000):
                         boton_buscar.click()
                         boton_encontrado = True
-                        print(f"✅ Clic en botón (Opción 2)")
+                        print(f"Clic en boton (Opcion 2)")
                 except:
                     pass
 
@@ -111,21 +114,21 @@ def descargar_pliego(referencia, guardar_zip=False):
                 try:
                     campo_busqueda.press('Enter')
                     boton_encontrado = True
-                    print(f"✅ Enter en campo de búsqueda (Opción 3)")
+                    print(f"Enter en campo de busqueda (Opcion 3)")
                 except:
                     pass
 
             if not boton_encontrado:
-                raise Exception("No se pudo ejecutar la búsqueda - botón no encontrado")
+                raise Exception("No se pudo ejecutar la busqueda - boton no encontrado")
 
-            print(f"⏳ Esperando confirmación del filtro...")
+            print(f"Esperando confirmacion del filtro...")
             page.wait_for_timeout(2000)
             filtro_aplicado = False
 
             try:
                 indicador_filtro = page.locator('text=Buscar resultados por').first
                 if indicador_filtro.is_visible(timeout=20000):
-                    print(f"✅ Filtro confirmado: 'Buscar resultados por'")
+                    print(f"Filtro confirmado: Buscar resultados por")
                     filtro_aplicado = True
             except:
                 pass
@@ -134,19 +137,19 @@ def descargar_pliego(referencia, guardar_zip=False):
                 try:
                     link_borrar = page.locator('a:has-text("Borrar")').first
                     if link_borrar.is_visible(timeout=5000):
-                        print(f"✅ Filtro confirmado: Link 'Borrar búsqueda'")
+                        print(f"Filtro confirmado: Link Borrar busqueda")
                         filtro_aplicado = True
                 except:
                     pass
 
             if filtro_aplicado:
-                print(f"✅ FILTRO APLICADO CORRECTAMENTE")
+                print(f"FILTRO APLICADO CORRECTAMENTE")
             else:
-                print(f"⚠️ ADVERTENCIA: No se confirmó el filtro, continuando...")
+                print(f"ADVERTENCIA: No se confirmo el filtro, continuando...")
 
             page.wait_for_timeout(3000)
 
-            print(f"🔎 Buscando {referencia} en resultados...")
+            print(f"Buscando {referencia} en resultados...")
             resultado = None
             xpaths = [
                 f'//td[contains(text(), "{referencia}")]',
@@ -161,30 +164,22 @@ def descargar_pliego(referencia, guardar_zip=False):
                     resultado_xpath = page.locator(f'xpath={xpath}').first
                     if resultado_xpath.is_visible(timeout=10000):
                         resultado = resultado_xpath
-                        print(f"   ✅ XPath {i+1} funcionó")
+                        print(f"   XPath {i+1} funciono")
                         break
                 except:
-                    print(f"   ❌ XPath {i+1} falló")
+                    print(f"   XPath {i+1} fallo")
                     continue
 
             if not resultado:
-                raise Exception(f"No se encontró la licitación {referencia} en los resultados")
+                raise Exception(f"No se encontro la licitacion {referencia} en los resultados")
 
-            print(f"✅ Licitación encontrada en la tabla")
+            print(f"Licitacion encontrada en la tabla")
 
             screenshot_path = f"{TEMP_DIR}/debug_tabla.png"
             page.screenshot(path=screenshot_path)
-            print(f"📸 Captura guardada en: {screenshot_path}")
 
-            print(f"🖱️ Buscando botón DETALLE...")
+            print(f"Buscando boton DETALLE...")
             fila = resultado.locator('xpath=ancestor::tr')
-
-            try:
-                html_fila = fila.inner_html()
-                print(f"📋 HTML de la fila:")
-                print(html_fila[:500])
-            except:
-                pass
 
             boton_detalle = None
             selectores_detalle = [
@@ -203,33 +198,33 @@ def descargar_pliego(referencia, guardar_zip=False):
                     boton = fila.locator(selector).first
                     if boton.count() > 0:
                         boton_detalle = boton
-                        print(f"   ✅ Selector {i+1} funcionó")
+                        print(f"   Selector {i+1} funciono")
                         break
                     else:
-                        print(f"   ❌ Selector {i+1} no encontró elementos")
+                        print(f"   Selector {i+1} no encontro elementos")
                 except Exception as e:
-                    print(f"   ❌ Selector {i+1} dio error: {str(e)[:50]}")
+                    print(f"   Selector {i+1} error: {str(e)[:50]}")
                     continue
 
             if not boton_detalle:
-                raise Exception("No se encontró el botón DETALLE con ningún selector")
+                raise Exception("No se encontro el boton DETALLE con ningun selector")
 
-            print(f"🖱️ Haciendo scroll al botón...")
+            print(f"Haciendo scroll al boton...")
             boton_detalle.scroll_into_view_if_needed()
             page.wait_for_timeout(2000)
 
-            print(f"🖱️ Haciendo clic en DETALLE...")
+            print(f"Haciendo clic en DETALLE...")
             boton_detalle.click()
-            print(f"✅ Clic en DETALLE realizado")
+            print(f"Clic en DETALLE realizado")
 
             page.wait_for_timeout(5000)
 
             pages = context.pages
             if len(pages) > 1:
                 page = pages[-1]
-                print(f"✅ Cambiado a nueva ventana")
+                print(f"Cambiado a nueva ventana")
 
-            print(f"🔎 Buscando iframe del detalle...")
+            print(f"Buscando iframe del detalle...")
             page.wait_for_timeout(3000)
 
             frames = page.frames
@@ -241,31 +236,31 @@ def descargar_pliego(referencia, guardar_zip=False):
                     print(f"   Probando frame {i+1}...")
                     boton_test = frame.locator('#tbToolBar_btnTbDownload').first
                     if boton_test.count() > 0:
-                        print(f"   ✅ FRAME CORRECTO encontrado (tiene botón de descarga)")
+                        print(f"   FRAME CORRECTO encontrado")
                         iframe_correcto = frame
                         break
                     else:
-                        print(f"   ❌ Frame no tiene el botón")
+                        print(f"   Frame no tiene el boton")
                 except Exception as e:
-                    print(f"   ❌ Error en frame {i+1}: {str(e)[:80]}")
+                    print(f"   Error en frame {i+1}: {str(e)[:80]}")
                     continue
 
             if not iframe_correcto:
-                print(f"   Reintentando búsqueda por contenido de texto...")
+                print(f"   Reintentando busqueda por contenido de texto...")
                 for i, frame in enumerate(frames):
                     try:
                         body_text = frame.locator('body').text_content(timeout=5000)
                         if body_text and referencia in body_text:
-                            print(f"   ✅ Frame {i+1} contiene la referencia")
+                            print(f"   Frame {i+1} contiene la referencia")
                             iframe_correcto = frame
                             break
                     except:
                         continue
 
             if not iframe_correcto:
-                raise Exception("No se encontró iframe con el botón de descarga")
+                raise Exception("No se encontro iframe con el boton de descarga")
 
-            print(f"⬇️ Buscando botón de descarga...")
+            print(f"Buscando boton de descarga...")
             boton_descarga = None
             selectores_descarga = [
                 '#tbToolBar_btnTbDownload',
@@ -281,38 +276,38 @@ def descargar_pliego(referencia, guardar_zip=False):
                     boton = iframe_correcto.locator(selector).first
                     if boton.count() > 0:
                         boton_descarga = boton
-                        print(f"   ✅ Selector {i+1} funcionó")
+                        print(f"   Selector {i+1} funciono")
                         break
                     else:
-                        print(f"   ❌ Selector {i+1} no encontró elementos")
+                        print(f"   Selector {i+1} no encontro elementos")
                 except Exception as e:
-                    print(f"   ❌ Selector {i+1} error: {str(e)[:50]}")
+                    print(f"   Selector {i+1} error: {str(e)[:50]}")
                     continue
 
             if not boton_descarga:
-                raise Exception("No se encontró el botón de descarga")
+                raise Exception("No se encontro el boton de descarga")
 
-            print(f"💾 Iniciando descarga...")
+            print(f"Iniciando descarga...")
             with page.expect_download(timeout=90000) as download_info:
                 boton_descarga.click()
 
             download = download_info.value
             zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
             download.save_as(zip_path)
-            print(f"✅ ZIP descargado: {zip_path}")
+            print(f"ZIP descargado: {zip_path}")
 
             if not os.path.exists(zip_path):
-                raise Exception("El archivo ZIP no se guardó correctamente")
+                raise Exception("El archivo ZIP no se guardo correctamente")
 
-            tamano_mb = os.path.getsize(zip_path) / (1024*1024)
-            print(f"   Tamaño: {tamano_mb:.2f} MB")
+            tamano_mb = os.path.getsize(zip_path) / (1024 * 1024)
+            print(f"   Tamano: {tamano_mb:.2f} MB")
 
-            print(f"📦 Extrayendo documento principal...")
+            print(f"Extrayendo documento principal...")
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 archivos_zip = zip_ref.namelist()
                 print(f"   Archivos en ZIP: {len(archivos_zip)}")
                 documento_encontrado = None
-                palabras_clave = ['pliego', 'ficha', 'terminos', 'términos', 'especificaciones', 'anexo']
+                palabras_clave = ['pliego', 'ficha', 'terminos', 'especificaciones', 'anexo']
 
                 for palabra in palabras_clave:
                     if documento_encontrado:
@@ -321,7 +316,7 @@ def descargar_pliego(referencia, guardar_zip=False):
                         if '1_Publicaciones/Adjuntos/' in archivo:
                             nombre_archivo = os.path.basename(archivo).lower()
                             if palabra in nombre_archivo and archivo.endswith('.pdf'):
-                                print(f"   ✅ Documento encontrado por '{palabra}': {os.path.basename(archivo)}")
+                                print(f"   Documento encontrado por '{palabra}': {os.path.basename(archivo)}")
                                 documento_path = f"{TEMP_DIR}/{nombre_seguro}_{int(time.time())}_documento.pdf"
                                 with zip_ref.open(archivo) as source:
                                     with open(documento_path, 'wb') as target:
@@ -330,7 +325,7 @@ def descargar_pliego(referencia, guardar_zip=False):
                                 break
 
                 if not documento_encontrado:
-                    print(f"   ⚠️ No se encontró por palabras clave, buscando PDF más grande...")
+                    print(f"   No se encontro por palabras clave, buscando PDF mas grande...")
                     pdfs_en_adjuntos = []
                     for archivo in archivos_zip:
                         if '1_Publicaciones/Adjuntos/' in archivo and archivo.endswith('.pdf'):
@@ -340,8 +335,7 @@ def descargar_pliego(referencia, guardar_zip=False):
                     if pdfs_en_adjuntos:
                         pdfs_en_adjuntos.sort(key=lambda x: x['tamano'], reverse=True)
                         archivo_mas_grande = pdfs_en_adjuntos[0]['nombre']
-                        print(f"   ✅ Usando PDF más grande: {os.path.basename(archivo_mas_grande)}")
-                        print(f"      Tamaño: {pdfs_en_adjuntos[0]['tamano'] / 1024:.1f} KB")
+                        print(f"   Usando PDF mas grande: {os.path.basename(archivo_mas_grande)}")
                         documento_path = f"{TEMP_DIR}/{nombre_seguro}_{int(time.time())}_documento.pdf"
                         with zip_ref.open(archivo_mas_grande) as source:
                             with open(documento_path, 'wb') as target:
@@ -349,19 +343,19 @@ def descargar_pliego(referencia, guardar_zip=False):
                         documento_encontrado = documento_path
 
                 if not documento_encontrado:
-                    raise Exception("No se encontró ningún documento principal en el ZIP")
+                    raise Exception("No se encontro ningun documento principal en el ZIP")
 
-                print(f"📄 Documento extraído exitosamente")
+                print(f"Documento extraido exitosamente")
 
                 if not guardar_zip:
                     try:
                         if os.path.exists(zip_path):
                             os.remove(zip_path)
-                            print(f"🗑️ ZIP eliminado (solo guardamos el PDF)")
+                            print(f"ZIP eliminado")
                     except Exception as e:
-                        print(f"⚠️ Error borrando ZIP: {str(e)}")
+                        print(f"Error borrando ZIP: {str(e)}")
                 else:
-                    print(f"📦 ZIP conservado: {zip_path}")
+                    print(f"ZIP conservado: {zip_path}")
 
                 browser.close()
                 return documento_encontrado
@@ -378,15 +372,15 @@ def endpoint_descargar_pliego():
         referencia = data.get('referencia')
 
         if not referencia:
-            return jsonify({"error": "Falta el parámetro 'referencia'"}), 400
+            return jsonify({"error": "Falta el parametro 'referencia'"}), 400
 
         limpiar_archivos_viejos()
         documento_path = verificar_archivo_en_cache(referencia)
 
         if documento_path:
-            print(f"✅ Usando documento en cache")
+            print(f"Usando documento en cache")
         else:
-            print(f"🔽 Descargando documento (no está en cache)")
+            print(f"Descargando documento (no esta en cache)")
             documento_path = descargar_pliego(referencia)
 
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
@@ -418,32 +412,27 @@ def analizar_pliego():
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
 
-        print(f"📊 Iniciando análisis de {referencia}")
+        print(f"Iniciando analisis de {referencia}")
 
-        # 1. Verificar cache
         archivo_pdf = verificar_archivo_en_cache(referencia)
 
-        # 2. Si no está en cache, descargar
         if not archivo_pdf:
-            print(f"📥 Archivo no encontrado en cache, descargando...")
+            print(f"Archivo no encontrado en cache, descargando...")
             archivo_pdf = descargar_pliego(referencia)
         else:
-            print(f"✅ Usando archivo desde cache: {archivo_pdf}")
+            print(f"Usando archivo desde cache: {archivo_pdf}")
 
-        # 3. Verificar tamaño
         tamano_bytes = os.path.getsize(archivo_pdf)
         tamano_mb = tamano_bytes / (1024 * 1024)
-        print(f"📏 Tamaño del PDF: {tamano_mb:.2f} MB")
+        print(f"Tamano del PDF: {tamano_mb:.2f} MB")
 
         if tamano_mb > 50:
-            print(f"⚠️ PDF excesivamente grande: {tamano_mb:.2f} MB")
             return jsonify({
                 'success': False,
-                'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). Límite: 50 MB.'
+                'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). Limite: 50 MB.'
             }), 400
 
-        # 4. Extraer texto del PDF
-        print(f"📄 Extrayendo texto del PDF...")
+        print(f"Extrayendo texto del PDF...")
         try:
             reader = PdfReader(archivo_pdf)
             texto_completo = ""
@@ -454,129 +443,93 @@ def analizar_pliego():
                     if texto_pagina:
                         texto_completo += texto_pagina + "\n\n"
                 except Exception as e:
-                    print(f"⚠️ Error extrayendo página {i+1}: {str(e)}")
+                    print(f"Error extrayendo pagina {i+1}: {str(e)}")
                     continue
 
             if not texto_completo.strip():
                 return jsonify({
                     'success': False,
-                    'error': 'No se pudo extraer texto del PDF. El documento puede estar protegido o ser solo imágenes.'
+                    'error': 'No se pudo extraer texto del PDF.'
                 }), 400
 
             if len(texto_completo) > 100000:
-                print(f"⚠️ Texto muy largo ({len(texto_completo)} caracteres), truncando...")
-                texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO - Análisis basado en las primeras páginas]"
+                print(f"Texto muy largo ({len(texto_completo)} caracteres), truncando...")
+                texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
 
-            print(f"✅ Texto extraído: {len(texto_completo)} caracteres, {len(reader.pages)} páginas")
+            print(f"Texto extraido: {len(texto_completo)} caracteres, {len(reader.pages)} paginas")
 
         except Exception as e:
-            print(f"❌ Error al leer PDF: {str(e)}")
             return jsonify({
                 'success': False,
                 'error': f'Error al procesar el PDF: {str(e)}'
             }), 400
 
-        # 5. Preparar perfil de empresa para el prompt
         perfil_empresa = ""
         if empresa_descripcion:
-            perfil_empresa += f"\n- Descripción: {empresa_descripcion}"
+            perfil_empresa += f"\n- Descripcion: {empresa_descripcion}"
         if empresa_website:
             perfil_empresa += f"\n- Sitio web: {empresa_website}"
 
         seccion_perfil = f"""
-PERFIL DE LA EMPRESA QUE EVALÚA:
+PERFIL DE LA EMPRESA QUE EVALUA:
 {perfil_empresa if perfil_empresa else "No disponible"}
 """ if perfil_empresa else ""
 
-        # 6. Crear el prompt para Claude
-        prompt_analisis = f"""Eres un experto analista de licitaciones públicas dominicanas.
+        prompt_analisis = f"""Eres un experto analista de licitaciones publicas dominicanas.
 
-CONTEXTO DE LA LICITACIÓN:
+CONTEXTO DE LA LICITACION:
 - Referencia: {referencia}
-- Título: {titulo}
-- Descripción: {descripcion}
+- Titulo: {titulo}
+- Descripcion: {descripcion}
 - Monto estimado: RD${monto:,.2f}
-- Fecha de hoy (cuando el usuario solicita este análisis): {fecha_hoy}
-- Fecha límite de presentación de oferta (del dashboard): {fecha_presentacion if fecha_presentacion else 'No disponible'}
+- Fecha de hoy: {fecha_hoy}
+- Fecha limite de presentacion: {fecha_presentacion if fecha_presentacion else 'No disponible'}
 {seccion_perfil}
-A continuación está el contenido completo del pliego de condiciones:
+A continuacion esta el contenido completo del pliego de condiciones:
 
 ---INICIO DEL PLIEGO---
 {texto_completo}
 ---FIN DEL PLIEGO---
 
 INSTRUCCIONES:
-Analiza el pliego y proporciona un análisis estructurado en formato JSON con esta estructura exacta:
+Analiza el pliego y proporciona un analisis estructurado en formato JSON con esta estructura exacta:
 
 {{
-  "sintesis": "Resumen ejecutivo en 2-3 oraciones sobre qué se está licitando y para qué institución",
-  "oportunidades": [
-    "Primera oportunidad identificada (específica del pliego)",
-    "Segunda oportunidad identificada (específica del pliego)",
-    "Tercera oportunidad identificada (específica del pliego)"
-  ],
-  "riesgos": [
-    "Primer riesgo o desafío identificado (específico del pliego)",
-    "Segundo riesgo o desafío identificado (específico del pliego)",
-    "Tercer riesgo o desafío identificado (específico del pliego)"
-  ],
-  "requisitos": [
-    "Primer requisito clave para participar (específico del pliego)",
-    "Segundo requisito clave para participar (específico del pliego)",
-    "Tercer requisito clave para participar (específico del pliego)"
-  ],
+  "sintesis": "Resumen ejecutivo en 2-3 oraciones",
+  "oportunidades": ["Primera oportunidad", "Segunda oportunidad", "Tercera oportunidad"],
+  "riesgos": ["Primer riesgo", "Segundo riesgo", "Tercer riesgo"],
+  "requisitos": ["Primer requisito", "Segundo requisito", "Tercer requisito"],
   "certificaciones_iso": {{
-    "exige_iso": "SÍ o NO",
-    "listado": [
-      "ISO XXXX — descripción del requisito exacto tal como aparece en el pliego"
-    ],
-    "nota": "Si no exige ISO, indicar si menciona alguna norma técnica equivalente (ASTM, CLSI, CE, FDA, etc.)"
+    "exige_iso": "SI o NO",
+    "listado": ["ISO XXXX - descripcion"],
+    "nota": "Normas tecnicas equivalentes si aplica"
   }},
   "tiempos": {{
-    "fecha_limite_oferta": "DD/MM/YYYY — fecha límite para presentar la oferta según el pliego",
-    "dias_calendario_restantes": "N días desde hoy ({fecha_hoy}) hasta la fecha límite",
-    "alerta": "Elige UNO: HOLGADO, AJUSTADO, o MUY AJUSTADO (menos de 5 días hábiles es MUY AJUSTADO, menos de 10 es AJUSTADO)",
-    "fechas_clave": [
-      "Lista cada fecha relevante del pliego: apertura de sobres, plazo para preguntas, visitas técnicas, etc."
-    ],
-    "advertencia": "Si el tiempo es AJUSTADO o MUY AJUSTADO, explica concretamente qué pasos de la preparación de la oferta se verían comprometidos. Dejar vacío si es HOLGADO."
+    "fecha_limite_oferta": "DD/MM/YYYY",
+    "dias_calendario_restantes": "N dias desde hoy ({fecha_hoy})",
+    "alerta": "HOLGADO, AJUSTADO, o MUY AJUSTADO",
+    "fechas_clave": ["Lista de fechas relevantes del pliego"],
+    "advertencia": "Si tiempo ajustado, explicar impacto. Vacio si holgado."
   }},
   "viabilidad": {{
-    "veredicto": "Elige UNO: VIABLE, VIABLE CON RIESGOS, o DIFÍCIL DE CUMPLIR",
-    "garantias": "Descripción de garantías o fianzas exigidas y si son proporcionales al monto",
-    "experiencia_previa": "Qué experiencia previa exige el pliego y si es un obstáculo real",
-    "especificaciones_tecnicas": "Si las marcas, modelos o especificaciones coinciden con el perfil de la empresa"
+    "veredicto": "VIABLE, VIABLE CON RIESGOS, o DIFICIL DE CUMPLIR",
+    "garantias": "Descripcion de garantias exigidas",
+    "experiencia_previa": "Experiencia previa que exige el pliego",
+    "especificaciones_tecnicas": "Compatibilidad con perfil de la empresa"
   }},
   "evaluacion": {{
-    "a_favor": [
-      "Primer argumento técnico a favor de presentar la oferta",
-      "Segundo argumento técnico a favor",
-      "Tercer argumento técnico a favor"
-    ],
-    "en_contra": [
-      "Primer argumento técnico en contra o factor de riesgo",
-      "Segundo argumento técnico en contra",
-      "Tercer argumento técnico en contra"
-    ]
+    "a_favor": ["Argumento 1", "Argumento 2", "Argumento 3"],
+    "en_contra": ["Riesgo 1", "Riesgo 2", "Riesgo 3"]
   }}
 }}
 
-IMPORTANTE:
-- Responde SOLO con el JSON, sin texto adicional ni markdown
-- Sé específico y práctico basándote en el contenido real del pliego
-- En "tiempos", la fecha límite de presentación viene del dashboard: {fecha_presentacion if fecha_presentacion else 'no disponible'}. Úsala como fecha límite principal para calcular días hábiles restantes desde hoy ({fecha_hoy}). Si el pliego no tiene cronograma, indica que las demás fechas del proceso (aclaraciones, apertura, etc.) no están en el documento y que habría que revisar los documentos complementarios del expediente.
-- En "evaluacion", usa lenguaje técnico y descriptivo — evita frases como "se recomienda" o "no se recomienda"
-- En "viabilidad", revisa explícitamente garantías, experiencia previa y especificaciones técnicas
-- Si el perfil de la empresa está disponible, úsalo para evaluar compatibilidad técnica"""
-
-        # 7. Llamar a Claude API
-        api_url = "https://api.anthropic.com/v1/messages"
+IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
 
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
             return jsonify({
                 'success': False,
-                'error': 'API key de Anthropic no configurada en Railway'
+                'error': 'API key de Anthropic no configurada'
             }), 500
 
         headers = {
@@ -588,37 +541,33 @@ IMPORTANTE:
         payload = {
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 3000,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt_analisis
-                }
-            ]
+            "messages": [{"role": "user", "content": prompt_analisis}]
         }
 
-        print("🤖 Enviando texto del pliego a Claude AI...")
-        response = requests.post(api_url, headers=headers, json=payload, timeout=120)
+        print("Enviando texto del pliego a Claude AI...")
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
 
         if response.status_code != 200:
-            error_detail = response.text[:500]
-            print(f"❌ Error de Claude API: {response.status_code} - {error_detail}")
             raise Exception(f"Error de Claude API: {response.status_code}")
 
-        # 8. Extraer y parsear respuesta
         claude_response = response.json()
         analisis_texto = claude_response['content'][0]['text']
         analisis_texto = analisis_texto.replace('```json', '').replace('```', '').strip()
 
-        # Extraer solo el bloque JSON (entre primer { y último })
         inicio = analisis_texto.find('{')
         fin = analisis_texto.rfind('}')
         if inicio == -1 or fin == -1:
-            raise json.JSONDecodeError('No se encontró JSON válido', analisis_texto, 0)
+            raise json.JSONDecodeError('No se encontro JSON valido', analisis_texto, 0)
         analisis_texto = analisis_texto[inicio:fin+1]
 
         analisis = json.loads(analisis_texto)
 
-        print(f"✅ Análisis completado con puntuación: {analisis.get('puntuacion', 0)}")
+        print(f"Analisis completado")
 
         return jsonify({
             'success': True,
@@ -627,14 +576,14 @@ IMPORTANTE:
         })
 
     except json.JSONDecodeError as e:
-        print(f"❌ Error parseando JSON del análisis: {str(e)}")
+        print(f"Error parseando JSON del analisis: {str(e)}")
         return jsonify({
             'success': False,
             'error': 'Error al procesar respuesta de Claude AI'
         }), 500
 
     except Exception as e:
-        print(f"❌ Error en análisis: {str(e)}")
+        print(f"Error en analisis: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -686,240 +635,134 @@ def cache_limpiar():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ============================================================
-# AGENTE 033 — Hojas 1, 2, 3 y 4
-# Agregar al final de main.py, antes del bloque if __name__
-# ============================================================
 
-import io
-from docx import Document
-from docx.shared import Pt
-import base64
-
-# ── FUNCIÓN AUXILIAR: descarga el ZIP completo y lo retorna como bytes ──────
-
-def descargar_zip_agente033(referencia):
-    """
-    Igual que descargar_pliego() pero retorna el ZIP en memoria
-    en vez de extraer solo el PDF principal.
-    """
-    os.makedirs(TEMP_DIR, exist_ok=True)
-    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
-    zip_path = f"{TEMP_DIR}/{nombre_seguro}_agente033.zip"
-
-    # Si ya está cacheado, usarlo directamente
-    if os.path.exists(zip_path):
-        edad = (time.time() - os.path.getmtime(zip_path)) / 86400
-        if edad <= CACHE_DIAS:
-            print(f"📦 ZIP en cache ({edad:.1f} días)")
-            return zip_path
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
-        context.set_default_timeout(120000)
-        page = context.new_page()
-
-        try:
-            # Navegar y buscar — misma lógica que descargar_pliego()
-            url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
-            page.goto(url_listado, timeout=90000)
-            page.wait_for_timeout(5000)
-
-            campo = page.locator('#txtAllWords2Search')
-            campo.wait_for(state='visible', timeout=10000)
-            campo.clear()
-            campo.fill(referencia)
-
-            try:
-                page.locator('input[type="button"][value="Buscar"]').first.click()
-            except:
-                campo.press('Enter')
-
-            page.wait_for_timeout(5000)
-
-            # Encontrar fila con la referencia
-            resultado = None
-            for xpath in [
-                f'//td[contains(text(), "{referencia}")]',
-                f'//td[text()="{referencia}"]',
-            ]:
-                try:
-                    el = page.locator(f'xpath={xpath}').first
-                    if el.is_visible(timeout=8000):
-                        resultado = el
-                        break
-                except:
-                    continue
-
-            if not resultado:
-                raise Exception(f"No se encontró {referencia} en el portal")
-
-            fila = resultado.locator('xpath=ancestor::tr')
-            boton_detalle = fila.locator('a[title="Detalle"]').first
-            boton_detalle.scroll_into_view_if_needed()
-            page.wait_for_timeout(1000)
-            boton_detalle.click()
-            page.wait_for_timeout(5000)
-
-            pages = context.pages
-            if len(pages) > 1:
-                page = pages[-1]
-
-            # Encontrar iframe con botón de descarga
-            iframe_ok = None
-            for frame in page.frames:
-                try:
-                    if frame.locator('#tbToolBar_btnTbDownload').count() > 0:
-                        iframe_ok = frame
-                        break
-                except:
-                    continue
-
-            if not iframe_ok:
-                raise Exception("No se encontró iframe con botón de descarga")
-
-            boton_dl = iframe_ok.locator('#tbToolBar_btnTbDownload').first
-
-            with page.expect_download(timeout=90000) as dl_info:
-                boton_dl.click()
-
-            download = dl_info.value
-            download.save_as(zip_path)
-            print(f"✅ ZIP descargado: {zip_path} ({os.path.getsize(zip_path)/1024/1024:.1f} MB)")
-
-            browser.close()
-            return zip_path
-
-        except Exception as e:
-            browser.close()
-            raise Exception(f"Error descargando ZIP: {str(e)}")
-
-
-# ── FUNCIÓN AUXILIAR: extrae ítems del PDF de ficha técnica con Claude ───────
+# ── FUNCION AUXILIAR: extrae items del PDF con Claude ────────────────────────
 
 def extraer_items_con_claude(pdf_bytes_list, referencia):
 
     def extraer_de_un_pdf(pdf_bytes, indice, contexto_previo=""):
-            """Extrae texto de un PDF y llama a Claude para obtener sus ítems."""
-            try:
-                reader = PdfReader(io.BytesIO(pdf_bytes))
-                texto = ""
-                for pg in reader.pages:
-                    t = pg.extract_text()
-                    if t:
-                        texto += t + "\n"
-            except Exception as e:
-                print(f"⚠️ Error leyendo PDF {indice + 1}: {e}")
-                return []
-    
-            if not texto.strip():
-                print(f"⚠️ PDF {indice + 1} sin texto extraíble — omitido")
-                return []
-    
-            contexto_str = f"""
-    CONTEXTO IMPORTANTE: Los documentos anteriores ya extrajeron los siguientes ítems:
-    {contexto_previo}
-    Este documento es una CONTINUACIÓN. Si no ves un encabezado de lote al inicio,
-    asigna los ítems al lote donde corresponde según la numeración que continúa.
-    """ if contexto_previo else ""
-    
-            prompt = f"""Eres un experto en licitaciones públicas dominicanas.
-    {contexto_str}
-    Contenido de un documento de la licitación {referencia} (documento {indice + 1}):
-    
-    {texto[:120000]}
-    
-    INSTRUCCIÓN:
-    Extrae TODOS los ítems, productos, equipos o materiales que aparecen en ESTE documento.
-    Pueden estar organizados en LOTES (LOTE I, LOTE II, LOTE III, etc.).
-    IMPORTANTE: identifica correctamente el lote de cada ítem según los encabezados
-    "LOTE- I", "LOTE- II", "LOTE- III" que aparecen en el documento.
-    No asumas que todos los ítems son del mismo lote.
-    
-    Para cada ítem devuelve:
-    - lote: número romano del lote (ej: "I", "II", "III"). Si no hay lotes, usa "I".
-    - numero: número del ítem dentro de su lote
-    - descripcion: descripción completa (incluye marca y modelo si aparecen)
-    - unidad: unidad de medida (UD, SVC, PAQ, KG, etc.)
-    - cantidad: cantidad numérica (o null si no aparece)
-    
-    Si este documento no contiene ningún producto, equipo o material, devuelve lista vacía.
-    
-    Responde ÚNICAMENTE con JSON válido, sin texto adicional:
-    {{
-      "items": [
-        {{"lote": "I", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
-        {{"lote": "II", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
-        ...
-      ]
-    }}"""
-    
-            api_key = os.environ.get('ANTHROPIC_API_KEY')
-            headers = {
-                "Content-Type": "application/json",
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01"
-            }
-            payload = {
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 16000,
-                "messages": [{"role": "user", "content": prompt}]
-            }
-    
-            resp = requests.post("https://api.anthropic.com/v1/messages",
-                                 headers=headers, json=payload, timeout=300)
-            if resp.status_code != 200:
-                print(f"⚠️ Error Claude API en PDF {indice + 1}: {resp.status_code}")
-                return []
-    
-            texto_resp = resp.json()['content'][0]['text']
-            texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
-            inicio = texto_resp.find('{')
-            fin = texto_resp.rfind('}')
-            if inicio == -1 or fin == -1:
-                return []
-            json_raw = texto_resp[inicio:fin + 1]
-            try:
-                data = json.loads(json_raw)
-            except json.JSONDecodeError:
-                print(f"  ⚠️ JSON malformado en PDF {indice + 1}, aplicando reparación...")
-                from json_repair import repair_json
-                json_reparado = repair_json(json_raw)
-                data = json.loads(json_reparado)
-            return data.get('items', [])
+        try:
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            texto = ""
+            for pg in reader.pages:
+                t = pg.extract_text()
+                if t:
+                    texto += t + "\n"
+        except Exception as e:
+            print(f"Error leyendo PDF {indice + 1}: {e}")
+            return []
 
-    # ── Procesar cada PDF por separado y fusionar ────────────────────────────
-    todos_items = {}  # clave: "LOTE-numero"
+        if not texto.strip():
+            print(f"PDF {indice + 1} sin texto extraible - omitido")
+            return []
+
+        if contexto_previo:
+            contexto_str = f"""
+CONTEXTO IMPORTANTE: Los documentos anteriores ya extrajeron los siguientes items:
+{contexto_previo}
+Este documento es una CONTINUACION. Si no ves un encabezado de lote al inicio,
+asigna los items al lote donde corresponde segun la numeracion que continua.
+"""
+        else:
+            contexto_str = ""
+
+        prompt = f"""Eres un experto en licitaciones publicas dominicanas.
+{contexto_str}
+Contenido de un documento de la licitacion {referencia} (documento {indice + 1}):
+
+{texto[:120000]}
+
+INSTRUCCION:
+Extrae TODOS los items, productos, equipos o materiales que aparecen en ESTE documento.
+Pueden estar organizados en LOTES (LOTE I, LOTE II, LOTE III, etc.).
+IMPORTANTE: identifica correctamente el lote de cada item segun los encabezados
+"LOTE- I", "LOTE- II", "LOTE- III" que aparecen en el documento.
+No asumas que todos los items son del mismo lote.
+
+Para cada item devuelve:
+- lote: numero romano del lote (ej: "I", "II", "III"). Si no hay lotes, usa "I".
+- numero: numero del item dentro de su lote
+- descripcion: descripcion completa (incluye marca y modelo si aparecen)
+- unidad: unidad de medida (UD, SVC, PAQ, KG, etc.)
+- cantidad: cantidad numerica (o null si no aparece)
+
+Si este documento no contiene ningun producto, equipo o material, devuelve lista vacia.
+
+Responde UNICAMENTE con JSON valido, sin texto adicional:
+{{
+  "items": [
+    {{"lote": "I", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
+    {{"lote": "II", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}}
+  ]
+}}"""
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01"
+        }
+        payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 16000,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json=payload,
+            timeout=300
+        )
+        if resp.status_code != 200:
+            print(f"Error Claude API en PDF {indice + 1}: {resp.status_code}")
+            return []
+
+        texto_resp = resp.json()['content'][0]['text']
+        texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
+        inicio = texto_resp.find('{')
+        fin = texto_resp.rfind('}')
+        if inicio == -1 or fin == -1:
+            return []
+        json_raw = texto_resp[inicio:fin + 1]
+        try:
+            data = json.loads(json_raw)
+        except json.JSONDecodeError:
+            print(f"JSON malformado en PDF {indice + 1}, aplicando reparacion...")
+            json_reparado = repair_json(json_raw)
+            data = json.loads(json_reparado)
+        return data.get('items', [])
+
+    todos_items = {}
     contexto_previo = ""
 
     for i, pdf_bytes in enumerate(pdf_bytes_list):
-        print(f"  🤖 Procesando PDF {i + 1}/{len(pdf_bytes_list)} con Claude...")
+        print(f"  Procesando PDF {i + 1}/{len(pdf_bytes_list)} con Claude...")
         items_pdf = extraer_de_un_pdf(pdf_bytes, i, contexto_previo)
-        print(f"     → {len(items_pdf)} ítems encontrados")
+        print(f"     -> {len(items_pdf)} items encontrados")
 
         for item in items_pdf:
             lote = str(item.get('lote', 'I')).strip().upper()
-            num  = str(item.get('numero', '')).strip()
+            num = str(item.get('numero', '')).strip()
             if not num:
                 continue
             clave = f"{lote}-{num}"
             if clave not in todos_items or not todos_items[clave].get('descripcion'):
                 todos_items[clave] = item
 
-        # Construir contexto para el siguiente PDF
         if items_pdf:
             resumen = {}
             for item in items_pdf:
                 lote = str(item.get('lote', 'I')).strip().upper()
-                resumen.setdefault(lote, []).append(int(item.get('numero', 0)) if str(item.get('numero', 0)).isdigit() else 0)
+                resumen.setdefault(lote, []).append(
+                    int(item.get('numero', 0)) if str(item.get('numero', 0)).isdigit() else 0
+                )
             partes = []
             for lote in sorted(resumen):
                 nums = sorted(resumen[lote])
-                partes.append(f"Lote {lote}: ítems {nums[0]} al {nums[-1]} ({len(nums)} ítems)")
+                partes.append(f"Lote {lote}: items {nums[0]} al {nums[-1]} ({len(nums)} items)")
             contexto_previo = "; ".join(partes)
 
-    # ── Ordenar por lote y número ─────────────────────────────────────────────
     orden_lote = {'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5}
 
     def clave_orden(item):
@@ -932,10 +775,9 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
 
     return sorted(todos_items.values(), key=clave_orden)
 
-def llenar_f033(docx_bytes, items):
-    from copy import deepcopy
 
-    doc   = Document(io.BytesIO(docx_bytes))
+def llenar_f033(docx_bytes, items):
+    doc = Document(io.BytesIO(docx_bytes))
     tabla = None
     for t in doc.tables:
         if len(t.columns) >= 6:
@@ -943,12 +785,11 @@ def llenar_f033(docx_bytes, items):
             break
 
     if not tabla:
-        raise Exception("No se encontró la tabla del F033 en el Word")
+        raise Exception("No se encontro la tabla del F033 en el Word")
 
-    # ── Identificar filas de encabezado, datos y VALOR TOTAL ─────────────────
-    filas_datos  = []
-    fila_total   = None
-    fila_template = None  # última fila de datos real (para clonar)
+    filas_datos = []
+    fila_total = None
+    fila_template = None
 
     for row in tabla.rows:
         txt = row.cells[0].text.strip().lower()
@@ -958,21 +799,19 @@ def llenar_f033(docx_bytes, items):
             fila_total = row
             continue
         filas_datos.append(row)
-        fila_template = row  # la última fila de datos sirve de plantilla
+        fila_template = row
 
-    # ── Insertar filas nuevas ANTES de VALOR TOTAL si hacen falta ────────────
     if len(filas_datos) < len(items):
         if fila_total and fila_template:
             faltan = len(items) - len(filas_datos)
             for _ in range(faltan):
                 nueva_tr = deepcopy(fila_template._tr)
-                # Limpiar contenido de las celdas clonadas
-                for tc in nueva_tr.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tc'):
-                    for p in tc.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p'):
-                        for r in p.findall('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r'):
+                ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+                for tc in nueva_tr.findall(f'.//{ns}tc'):
+                    for p in tc.findall(f'{ns}p'):
+                        for r in p.findall(f'{ns}r'):
                             p.remove(r)
                 fila_total._tr.addprevious(nueva_tr)
-            # Reconstruir lista de filas de datos (excluye encabezados y VALOR TOTAL)
             filas_datos = []
             for row in tabla.rows:
                 txt = row.cells[0].text.strip().lower()
@@ -982,18 +821,15 @@ def llenar_f033(docx_bytes, items):
                     break
                 filas_datos.append(row)
         else:
-            # Sin fila de total: agregar al final
             while len(filas_datos) < len(items):
                 filas_datos.append(tabla.add_row())
 
-# -- Llenar columnas 0-3 (Item, Descripcion, Unidad, Cantidad) ------------
-    lote_actual = None
     for i, item in enumerate(items):
         if i >= len(filas_datos):
             break
         celdas = filas_datos[i].cells
 
-        def set_cell(col, val):
+        def set_cell(col, val, celdas=celdas):
             try:
                 p = celdas[col].paragraphs[0]
                 p.clear()
@@ -1026,7 +862,7 @@ def agente_033():
         if not referencia:
             return jsonify({"error": "Falta 'referencia'"}), 400
 
-        print(f"\n AGENTE 033: {referencia}")
+        print(f"\nAGENTE 033: {referencia}")
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
         zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
 
@@ -1062,7 +898,7 @@ def agente_033():
                         print(f"  F033 encontrado: {os.path.basename(archivo)}")
 
                 if archivo.lower().endswith('.pdf'):
-                    es_ficha = any(k in nombre for k in ['ficha', 'tecnica', 'tecnica'])
+                    es_ficha = any(k in nombre for k in ['ficha', 'tecnica'])
                     es_pliego = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
                     es_listado = any(k in nombre for k in ['listado', 'especificacion'])
                     if es_ficha:
@@ -1073,38 +909,44 @@ def agente_033():
                         print(f"  Pliego: {os.path.basename(archivo)}")
                     elif es_listado:
                         fichas_secundarias.append(zf.read(archivo))
-                        print(f"  Listado (secundario): {os.path.basename(archivo)}")
+                        print(f"  Listado: {os.path.basename(archivo)}")
 
         if not f033_bytes:
             return jsonify({
                 "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitacion puede ser Comparacion de Precios."
             }), 404
 
+        # Construir candidatos en orden: pliego > ficha tecnica > listado
+        candidatos = []
+        if fichas_pliego:
+            candidatos.append(('pliego', fichas_pliego))
         if fichas_prioritarias:
-            fichas_bytes = fichas_prioritarias
-            print(f"  Usando ficha(s) tecnica(s): {len(fichas_bytes)} archivo(s)")
-        elif fichas_pliego:
-            fichas_bytes = fichas_pliego
-            print(f"  Sin ficha tecnica, usando pliego: {len(fichas_bytes)} archivo(s)")
-        elif fichas_secundarias:
-            fichas_bytes = fichas_secundarias
-            print(f"  Sin ficha ni pliego, usando listado: {len(fichas_bytes)} archivo(s)")
-        else:
-            fichas_bytes = []
+            candidatos.append(('ficha tecnica', fichas_prioritarias))
+        if fichas_secundarias:
+            candidatos.append(('listado', fichas_secundarias))
 
-        if not fichas_bytes:
+        if not candidatos:
             return jsonify({
-                "error": "No es posible procesar el F033 porque no se encontraron los PDFs basicos (ficha tecnica, pliego o listado) en 1_Publicaciones/Adjuntos/."
+                "error": "No es posible procesar el F033 porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
             }), 404
 
-        print(f"  F033 OK | Fichas a procesar: {len(fichas_bytes)}")
+        print(f"  F033 OK | Candidatos: {[c[0] for c in candidatos]}")
 
+        # PASO 3: Intentar cada candidato hasta obtener suficientes items
         print("PASO 3: Extrayendo items con Claude...")
-        items = extraer_items_con_claude(fichas_bytes, referencia)
-        print(f"  {len(items)} items")
+        items = []
+        for nombre_candidato, fichas_bytes in candidatos:
+            print(f"  Probando con: {nombre_candidato}")
+            items = extraer_items_con_claude(fichas_bytes, referencia)
+            print(f"  -> {len(items)} items encontrados")
+            if len(items) >= 5:
+                print(f"  Usando {nombre_candidato} ({len(items)} items)")
+                break
+            else:
+                print(f"  Muy pocos items en {nombre_candidato}, probando siguiente...")
 
         if not items:
-            return jsonify({"error": "Claude no extrajo items de las fichas"}), 500
+            return jsonify({"error": "Claude no extrajo items de ninguno de los PDFs disponibles"}), 500
 
         print("PASO 4: Generando F033 pre-llenado...")
         docx_relleno = llenar_f033(f033_bytes, items)
