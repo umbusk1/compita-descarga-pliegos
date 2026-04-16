@@ -986,7 +986,7 @@ def llenar_f033(docx_bytes, items):
             while len(filas_datos) < len(items):
                 filas_datos.append(tabla.add_row())
 
-    # ── Llenar columnas 0–3 (Ítem, Descripción, Unidad, Cantidad) ────────────
+# -- Llenar columnas 0-3 (Item, Descripcion, Unidad, Cantidad) ------------
     lote_actual = None
     for i, item in enumerate(items):
         if i >= len(filas_datos):
@@ -1000,11 +1000,10 @@ def llenar_f033(docx_bytes, items):
                 run = p.add_run(str(val) if val is not None else '')
                 run.font.size = Pt(9)
             except Exception as e:
-                print(f"⚠️ Error en celda {col}: {e}")
+                print(f"Error en celda {col}: {e}")
 
-        # Número de ítem: incluir referencia al lote si hay más de un lote
         lote = str(item.get('lote', '')).strip()
-        num  = item.get('numero', i + 1)
+        num = item.get('numero', i + 1)
         etiqueta_num = f"L-{lote}-{num}" if lote else str(num)
 
         set_cell(0, etiqueta_num)
@@ -1017,6 +1016,7 @@ def llenar_f033(docx_bytes, items):
     output.seek(0)
     return output.getvalue()
 
+
 @app.route('/agente-033', methods=['POST'])
 def agente_033():
     try:
@@ -1026,33 +1026,29 @@ def agente_033():
         if not referencia:
             return jsonify({"error": "Falta 'referencia'"}), 400
 
-        print(f"\n🤖 AGENTE 033: {referencia}")
+        print(f"\n AGENTE 033: {referencia}")
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
         zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
 
-        # PASO 1: Descargar usando la función original (que ya funciona)
-        # pasamos guardar_zip=True para que no borre el ZIP
-        print("📥 PASO 1: Descargando ZIP...")
+        print("PASO 1: Descargando ZIP...")
         os.makedirs(TEMP_DIR, exist_ok=True)
 
         zip_ya_existe = os.path.exists(zip_path) and \
             (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
 
         if not zip_ya_existe:
-            # Llamamos descargar_pliego con guardar_zip=True
             descargar_pliego(referencia, guardar_zip=True)
         else:
-            print(f"📦 ZIP en cache")
+            print("ZIP en cache")
 
         if not os.path.exists(zip_path):
             return jsonify({"error": "No se pudo obtener el ZIP"}), 500
 
-        # PASO 2: Extraer F033 y fichas técnicas del ZIP
-        print("📦 PASO 2: Extrayendo archivos...")
+        print("PASO 2: Extrayendo archivos...")
         f033_bytes = None
-        fichas_prioritarias  = []   # fichas técnicas con estructura de lotes
-        fichas_pliego        = []   # pliegos de condiciones
-        fichas_secundarias   = []   # listados, cronogramas, etc.
+        fichas_prioritarias = []
+        fichas_pliego = []
+        fichas_secundarias = []
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             for archivo in zf.namelist():
@@ -1060,68 +1056,59 @@ def agente_033():
                     continue
                 nombre = os.path.basename(archivo).lower()
 
-                # F033 Word
                 if archivo.lower().endswith(('.docx', '.doc')):
                     if '033' in nombre:
                         f033_bytes = zf.read(archivo)
-                        print(f"  ✅ F033 encontrado: {os.path.basename(archivo)}")
+                        print(f"  F033 encontrado: {os.path.basename(archivo)}")
 
-                # Fichas técnicas PDF
                 if archivo.lower().endswith('.pdf'):
-                    es_ficha   = any(k in nombre for k in ['ficha', 'tecnica', 'técnica'])
-                    es_pliego  = any(k in nombre for k in ['pliego', 'condiciones', 'terminos', 'términos'])
-                    es_listado = any(k in nombre for k in ['listado', 'especificacion', 'especificación'])
+                    es_ficha = any(k in nombre for k in ['ficha', 'tecnica', 'tecnica'])
+                    es_pliego = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
+                    es_listado = any(k in nombre for k in ['listado', 'especificacion'])
                     if es_ficha:
                         fichas_prioritarias.append(zf.read(archivo))
-                        print(f"  ✅ Ficha técnica: {os.path.basename(archivo)}")
+                        print(f"  Ficha tecnica: {os.path.basename(archivo)}")
                     elif es_pliego:
                         fichas_pliego.append(zf.read(archivo))
-                        print(f"  📄 Pliego: {os.path.basename(archivo)}")
+                        print(f"  Pliego: {os.path.basename(archivo)}")
                     elif es_listado:
                         fichas_secundarias.append(zf.read(archivo))
-                        print(f"  📋 Listado (secundario): {os.path.basename(archivo)}")
+                        print(f"  Listado (secundario): {os.path.basename(archivo)}")
 
         if not f033_bytes:
             return jsonify({
-                "error": "No se encontró el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitación puede ser Comparación de Precios."
+                "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitacion puede ser Comparacion de Precios."
             }), 404
 
         if fichas_prioritarias:
             fichas_bytes = fichas_prioritarias
-            print(f"  📌 Usando ficha(s) técnica(s): {len(fichas_bytes)} archivo(s)")
-	        elif fichas_pliego:
+            print(f"  Usando ficha(s) tecnica(s): {len(fichas_bytes)} archivo(s)")
+        elif fichas_pliego:
             fichas_bytes = fichas_pliego
-            print(f"  📌 Sin ficha técnica, usando pliego: {len(fichas_bytes)} archivo(s)")
+            print(f"  Sin ficha tecnica, usando pliego: {len(fichas_bytes)} archivo(s)")
         elif fichas_secundarias:
             fichas_bytes = fichas_secundarias
-            print(f"  📌 Sin ficha ni pliego, usando listado: {len(fichas_bytes)} archivo(s)")
+            print(f"  Sin ficha ni pliego, usando listado: {len(fichas_bytes)} archivo(s)")
         else:
             fichas_bytes = []
 
-        if not f033_bytes:
-            return jsonify({
-                "error": "No se encontró el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitación puede ser Comparación de Precios."
-            }), 404
-
         if not fichas_bytes:
             return jsonify({
-                "error": "No es posible procesar el F033 porque no se encontraron los PDFs básicos (ficha técnica o listado de ítems) en 1_Publicaciones/Adjuntos/."
+                "error": "No es posible procesar el F033 porque no se encontraron los PDFs basicos (ficha tecnica, pliego o listado) en 1_Publicaciones/Adjuntos/."
             }), 404
 
-        print(f"  F033 ✅ | Fichas a procesar: {len(fichas_bytes)}")
+        print(f"  F033 OK | Fichas a procesar: {len(fichas_bytes)}")
 
-        # PASO 3: Extraer ítems con Claude
-        print("🤖 PASO 3: Extrayendo ítems con Claude...")
+        print("PASO 3: Extrayendo items con Claude...")
         items = extraer_items_con_claude(fichas_bytes, referencia)
-        print(f"  ✅ {len(items)} ítems")
+        print(f"  {len(items)} items")
 
         if not items:
-            return jsonify({"error": "Claude no extrajo ítems de las fichas"}), 500
+            return jsonify({"error": "Claude no extrajo items de las fichas"}), 500
 
-        # PASO 4: Generar Word pre-llenado
-        print("📝 PASO 4: Generando F033 pre-llenado...")
+        print("PASO 4: Generando F033 pre-llenado...")
         docx_relleno = llenar_f033(f033_bytes, items)
-        print(f"  ✅ Word listo ({len(docx_relleno)} bytes)")
+        print(f"  Word listo ({len(docx_relleno)} bytes)")
 
         return send_file(
             io.BytesIO(docx_relleno),
@@ -1131,8 +1118,9 @@ def agente_033():
         )
 
     except Exception as e:
-        print(f"❌ Agente 033 error: {str(e)}")
+        print(f"Agente 033 error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
