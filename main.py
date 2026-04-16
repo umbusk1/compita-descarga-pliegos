@@ -800,7 +800,7 @@ def descargar_zip_agente033(referencia):
 
 def extraer_items_con_claude(pdf_bytes_list, referencia):
 
-    def extraer_de_un_pdf(pdf_bytes, indice, contexto_previo=""):
+def extraer_de_un_pdf(pdf_bytes, indice, contexto_previo=""):
         """Extrae texto de un PDF y llama a Claude para obtener sus ítems."""
         try:
             reader = PdfReader(io.BytesIO(pdf_bytes))
@@ -821,7 +821,7 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
 CONTEXTO IMPORTANTE: Los documentos anteriores ya extrajeron los siguientes ítems:
 {contexto_previo}
 Este documento es una CONTINUACIÓN. Si no ves un encabezado de lote al inicio,
-asigna los ítems al lote donde correspondería según la numeración que continúa.
+asigna los ítems al lote donde corresponde según la numeración que continúa.
 """ if contexto_previo else ""
 
         prompt = f"""Eres un experto en licitaciones públicas dominicanas.
@@ -832,11 +832,16 @@ Contenido de un documento de la licitación {referencia} (documento {indice + 1}
 
 INSTRUCCIÓN:
 Extrae TODOS los ítems, productos, equipos o materiales que aparecen en ESTE documento.
-Pueden estar en tablas, listas numeradas, fichas técnicas, listados de equipos o especificaciones.
+Pueden estar organizados en LOTES (LOTE I, LOTE II, LOTE III, etc.).
+IMPORTANTE: identifica correctamente el lote de cada ítem según los encabezados
+"LOTE- I", "LOTE- II", "LOTE- III" que aparecen en el documento.
+No asumas que todos los ítems son del mismo lote.
+
 Para cada ítem devuelve:
-- numero: número o posición del ítem (si no tiene número, usa orden secuencial)
-- descripcion: descripción completa del producto o equipo
-- unidad: unidad de medida (UD, PAQ, LB, CAJ, KG, C/U, etc.)
+- lote: número romano del lote (ej: "I", "II", "III"). Si no hay lotes, usa "I".
+- numero: número del ítem dentro de su lote
+- descripcion: descripción completa (incluye marca y modelo si aparecen)
+- unidad: unidad de medida (UD, SVC, PAQ, KG, etc.)
 - cantidad: cantidad numérica (o null si no aparece)
 
 Si este documento no contiene ningún producto, equipo o material, devuelve lista vacía.
@@ -844,7 +849,8 @@ Si este documento no contiene ningún producto, equipo o material, devuelve list
 Responde ÚNICAMENTE con JSON válido, sin texto adicional:
 {{
   "items": [
-    {{"numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 10}},
+    {{"lote": "I", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
+    {{"lote": "II", "numero": "1", "descripcion": "...", "unidad": "UD", "cantidad": 1}},
     ...
   ]
 }}"""
@@ -857,12 +863,12 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         }
         payload = {
             "model": "claude-sonnet-4-20250514",
-            "max_tokens": 8000,
+            "max_tokens": 16000,
             "messages": [{"role": "user", "content": prompt}]
         }
 
         resp = requests.post("https://api.anthropic.com/v1/messages",
-                             headers=headers, json=payload, timeout=120)
+                             headers=headers, json=payload, timeout=300)
         if resp.status_code != 200:
             print(f"⚠️ Error Claude API en PDF {indice + 1}: {resp.status_code}")
             return []
@@ -873,7 +879,14 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         fin = texto_resp.rfind('}')
         if inicio == -1 or fin == -1:
             return []
-        data = json.loads(texto_resp[inicio:fin + 1])
+        json_raw = texto_resp[inicio:fin + 1]
+        try:
+            data = json.loads(json_raw)
+        except json.JSONDecodeError:
+            print(f"  ⚠️ JSON malformado en PDF {indice + 1}, aplicando reparación...")
+            from json_repair import repair_json
+            json_reparado = repair_json(json_raw)
+            data = json.loads(json_reparado)
         return data.get('items', [])
 
     # ── Procesar cada PDF por separado y fusionar ────────────────────────────
