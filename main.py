@@ -860,7 +860,7 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
         }
 
         resp = requests.post("https://api.anthropic.com/v1/messages",
-                             headers=headers, json=payload, timeout=120)
+                             headers=headers, json=payload, timeout=300)
         if resp.status_code != 200:
             print(f"⚠️ Error Claude API en PDF {indice + 1}: {resp.status_code}")
             return []
