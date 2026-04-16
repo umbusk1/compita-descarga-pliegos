@@ -643,17 +643,49 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
     def extraer_de_un_pdf(pdf_bytes, indice, contexto_previo=""):
         try:
             reader = PdfReader(io.BytesIO(pdf_bytes))
+
+            # Caso 1: PDF protegido con contrasena
+            if reader.is_encrypted:
+                print(f"PDF {indice + 1} esta protegido con contrasena - omitido")
+                return []
+
             texto = ""
+            paginas_sin_texto = 0
             for pg in reader.pages:
-                t = pg.extract_text()
-                if t:
-                    texto += t + "\n"
+                try:
+                    t = pg.extract_text()
+                    if t and t.strip():
+                        texto += t + "\n"
+                    else:
+                        paginas_sin_texto += 1
+                except Exception as e:
+                    print(f"Error extrayendo pagina en PDF {indice + 1}: {e}")
+                    paginas_sin_texto += 1
+                    continue
+
+            # Caso 2: PDF solo de imagenes (todas las paginas sin texto)
+            total_paginas = len(reader.pages)
+            if total_paginas > 0 and paginas_sin_texto == total_paginas:
+                print(f"PDF {indice + 1} parece ser solo imagenes escaneadas ({total_paginas} paginas sin texto) - omitido")
+                return []
+
+            # Caso 3: texto parcialmente extraible (advertencia informativa)
+            if paginas_sin_texto > 0:
+                print(f"PDF {indice + 1}: {paginas_sin_texto} de {total_paginas} paginas sin texto extraible")
+
         except Exception as e:
-            print(f"Error leyendo PDF {indice + 1}: {e}")
+            # Caso 4: PDF corrupto u otro error de lectura
+            msg = str(e).lower()
+            if 'password' in msg or 'encrypt' in msg:
+                print(f"PDF {indice + 1} requiere contrasena - omitido")
+            elif 'eof' in msg or 'invalid' in msg or 'corrupt' in msg:
+                print(f"PDF {indice + 1} parece estar corrupto o mal formado - omitido")
+            else:
+                print(f"Error leyendo PDF {indice + 1}: {e}")
             return []
 
         if not texto.strip():
-            print(f"PDF {indice + 1} sin texto extraible - omitido")
+            print(f"PDF {indice + 1} no tiene texto extraible - omitido")
             return []
 
         if contexto_previo:
