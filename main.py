@@ -15,6 +15,7 @@ from docx.shared import Pt
 from pypdf import PdfReader
 from json_repair import repair_json
 from copy import deepcopy
+import psycopg2         # ← NUEVO
 
 app = Flask(__name__)
 CORS(app, origins=["https://compita.umbusk.com"])
@@ -396,6 +397,57 @@ def endpoint_descargar_pliego():
         return jsonify({"error": str(e)}), 500
 
 
+# ── NUEVO: buscar precios históricos en precios_referencia ─────────────────
+def buscar_precios_referencia(titulo, descripcion):
+    """
+    Busca ítems similares en precios_referencia usando el título
+    y descripción de la licitación que se está analizando.
+    Devuelve lista de dicts con precios de referencia, o [] si no hay datos.
+    """
+    db_url = os.environ.get('DATABASE_URL')
+    if not db_url:
+        return []
+    try:
+        terminos = f"{titulo} {descripcion}".strip()[:300]
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                descripcion,
+                unidad_medida,
+                ROUND(AVG(precio_unitario)::numeric, 2)  AS precio_promedio,
+                ROUND(MIN(precio_unitario)::numeric, 2)  AS precio_minimo,
+                ROUND(MAX(precio_unitario)::numeric, 2)  AS precio_maximo,
+                COUNT(*)                                  AS num_referencias,
+                moneda
+            FROM precios_referencia
+            WHERE to_tsvector('spanish', descripcion)
+                  @@ plainto_tsquery('spanish', %s)
+              AND precio_unitario > 0
+            GROUP BY descripcion, unidad_medida, moneda
+            ORDER BY num_referencias DESC
+            LIMIT 10
+        """, (terminos,))
+        filas = cur.fetchall()
+        cur.close()
+        conn.close()
+        return [
+            {
+                "descripcion":     f[0],
+                "unidad_medida":   f[1],
+                "precio_promedio": float(f[2]) if f[2] else None,
+                "precio_minimo":   float(f[3]) if f[3] else None,
+                "precio_maximo":   float(f[4]) if f[4] else None,
+                "num_referencias": int(f[5]),
+                "moneda":          f[6] or "DOP"
+            }
+            for f in filas
+        ]
+    except Exception as e:
+        print(f"Error buscando precios referencia: {e}")
+        return []
+
+
 @app.route('/analizar-pliego', methods=['POST'])
 def analizar_pliego():
     try:
@@ -464,6 +516,30 @@ def analizar_pliego():
                 'error': f'Error al procesar el PDF: {str(e)}'
             }), 400
 
+        # ── NUEVO: buscar precios históricos ──────────────────────────────────
+        print(f"Buscando precios historicos de referencia...")
+        precios_ref = buscar_precios_referencia(titulo, descripcion)
+        print(f"Precios historicos encontrados: {len(precios_ref)} items")
+
+        bloque_precios = ""
+        if precios_ref:
+            lineas = []
+            for p in precios_ref:
+                lineas.append(
+                    f"- {p['descripcion']} ({p['unidad_medida'] or 'sin unidad'}): "
+                    f"promedio {p['precio_promedio']:,.2f} {p['moneda']} "
+                    f"[rango {p['precio_minimo']:,.2f} – {p['precio_maximo']:,.2f}] "
+                    f"({p['num_referencias']} ofertas históricas)"
+                )
+            bloque_precios = f"""
+PRECIOS HISTÓRICOS DE REFERENCIA (base de datos interna Compita, licitaciones adjudicadas 2026):
+{chr(10).join(lineas)}
+
+Usa estos precios como contexto para evaluar si los montos estimados del pliego son razonables.
+Si algún ítem del pliego coincide con los anteriores, menciónalo en tu análisis.
+"""
+        # ─────────────────────────────────────────────────────────────────────
+
         perfil_empresa = ""
         if empresa_descripcion:
             perfil_empresa += f"\n- Descripcion: {empresa_descripcion}"
@@ -484,7 +560,7 @@ CONTEXTO DE LA LICITACION:
 - Monto estimado: RD${monto:,.2f}
 - Fecha de hoy: {fecha_hoy}
 - Fecha limite de presentacion: {fecha_presentacion if fecha_presentacion else 'No disponible'}
-{seccion_perfil}
+{seccion_perfil}{bloque_precios}
 A continuacion esta el contenido completo del pliego de condiciones:
 
 ---INICIO DEL PLIEGO---
@@ -520,7 +596,16 @@ Analiza el pliego y proporciona un analisis estructurado en formato JSON con est
   "evaluacion": {{
     "a_favor": ["Argumento 1", "Argumento 2", "Argumento 3"],
     "en_contra": ["Riesgo 1", "Riesgo 2", "Riesgo 3"]
-  }}
+  }},
+  "precios_historicos": {json.dumps([
+      {{"item": p["descripcion"][:80],
+        "precio_promedio": p["precio_promedio"],
+        "precio_minimo": p["precio_minimo"],
+        "precio_maximo": p["precio_maximo"],
+        "num_referencias": p["num_referencias"],
+        "moneda": p["moneda"]}}
+      for p in precios_ref
+  ], ensure_ascii=False) if precios_ref else "[]"}
 }}
 
 IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
@@ -567,12 +652,17 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
 
         analisis = json.loads(analisis_texto)
 
+        # Garantizar que precios_historicos siempre esté en la respuesta
+        if 'precios_historicos' not in analisis:
+            analisis['precios_historicos'] = precios_ref
+
         print(f"Analisis completado")
 
         return jsonify({
             'success': True,
             'pliego_analizado': True,
-            'analisis': analisis
+            'analisis': analisis,
+            'tiene_precios_historicos': len(precios_ref) > 0   # ← NUEVO: flag para el frontend
         })
 
     except json.JSONDecodeError as e:
@@ -644,7 +734,6 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
         try:
             reader = PdfReader(io.BytesIO(pdf_bytes))
 
-            # Caso 1: PDF protegido con contrasena
             if reader.is_encrypted:
                 print(f"PDF {indice + 1} esta protegido con contrasena - omitido")
                 return []
@@ -663,18 +752,15 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
                     paginas_sin_texto += 1
                     continue
 
-            # Caso 2: PDF solo de imagenes
             total_paginas = len(reader.pages)
             if total_paginas > 0 and paginas_sin_texto == total_paginas:
                 print(f"PDF {indice + 1} parece ser solo imagenes ({total_paginas} paginas sin texto) - omitido")
                 return []
 
-            # Caso 3: texto parcialmente extraible
             if paginas_sin_texto > 0:
                 print(f"PDF {indice + 1}: {paginas_sin_texto} de {total_paginas} paginas sin texto")
 
         except Exception as e:
-            # Caso 4: PDF corrupto u otro error
             msg = str(e).lower()
             if 'password' in msg or 'encrypt' in msg:
                 print(f"PDF {indice + 1} requiere contrasena - omitido")
@@ -780,7 +866,6 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
         politica = data.get('politica_itbis', 'NO_ESPECIFICADO')
         items_pdf = data.get('items', [])
 
-        # Inyectar politica_itbis en cada item para que llegue a llenar_f033()
         for item in items_pdf:
             item['politica_itbis'] = politica
 
@@ -878,7 +963,6 @@ def llenar_f033(docx_bytes, items):
             while len(filas_datos) < len(items):
                 filas_datos.append(tabla.add_row())
 
-    # Determinar politica global de ITBIS desde el primer item que la tenga
     politica_global = 'NO_ESPECIFICADO'
     for item in items:
         p = item.get('politica_itbis', '')
@@ -909,9 +993,7 @@ def llenar_f033(docx_bytes, items):
         set_cell(1, item.get('descripcion', ''))
         set_cell(2, item.get('unidad', ''))
         set_cell(3, item.get('cantidad', ''))
-        # Col 4 (Precio Unitario) vacia — la llena el usuario
 
-        # Col 5: ITBIS pre-marcado segun politica del pliego y tipo de item
         if len(celdas) > 5:
             itbis_aplica = item.get('itbis_aplica', True)
             if politica_global == 'EXENTO':
@@ -921,7 +1003,6 @@ def llenar_f033(docx_bytes, items):
             elif politica_global == 'TRANSPARENTADO':
                 valor_itbis = '18%' if itbis_aplica else '0%'
             else:
-                # NO_ESPECIFICADO: aplicar regla de ley por item
                 valor_itbis = '18%' if itbis_aplica else '0%'
             set_cell(5, valor_itbis)
 
@@ -979,9 +1060,7 @@ def agente_033():
             archivos = zf.namelist()
 
             if not archivos:
-                return jsonify({
-                    "error": "El ZIP descargado esta vacio."
-                }), 500
+                return jsonify({"error": "El ZIP descargado esta vacio."}), 500
 
             tiene_adjuntos = any('1_Publicaciones/Adjuntos/' in a for a in archivos)
             if not tiene_adjuntos:
@@ -1018,7 +1097,6 @@ def agente_033():
                 "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitacion puede ser Comparacion de Precios."
             }), 404
 
-        # Candidatos en orden: pliego > ficha tecnica > listado
         candidatos = []
         if fichas_pliego:
             candidatos.append(('pliego', fichas_pliego))
@@ -1034,7 +1112,6 @@ def agente_033():
 
         print(f"  F033 OK | Candidatos: {[c[0] for c in candidatos]}")
 
-        # PASO 3: Intentar cada candidato hasta obtener suficientes items
         print("PASO 3: Extrayendo items con Claude...")
         items = []
         for nombre_candidato, fichas_bytes in candidatos:
@@ -1064,6 +1141,7 @@ def agente_033():
     except Exception as e:
         print(f"Agente 033 error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
 
 
 if __name__ == '__main__':
