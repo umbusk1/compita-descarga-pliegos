@@ -6,3 +6,5 @@ requests==2.31.0
 pypdf==3.17.4
 python-docx
 json-repair
+anthropic
+psycopg2-binary
