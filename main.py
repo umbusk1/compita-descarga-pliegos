@@ -15,7 +15,8 @@ from docx.shared import Pt
 from pypdf import PdfReader
 from json_repair import repair_json
 from copy import deepcopy
-import psycopg2         # ← NUEVO
+import threading
+import psycopg2
 
 app = Flask(__name__)
 CORS(app, origins=["https://compita.umbusk.com"])
@@ -1142,7 +1143,211 @@ def agente_033():
         print(f"Agente 033 error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# ══════════════════════════════════════════════════════════════════════════════
+# BACKFILL ETAPA 1 — Descargar ZIPs y guardar PDFs en ofertas_pendientes
+# ══════════════════════════════════════════════════════════════════════════════
 
+# Estado global para consultar progreso
+_descarga_estado = {
+    "corriendo": False,
+    "total": 0,
+    "procesadas": 0,
+    "pdfs_guardados": 0,
+    "errores": 0,
+    "ultimo_mensaje": "Sin ejecutar",
+    "iniciado_en": None
+}
+
+PALABRAS_INCLUIR_OFERTA = ['oferta', 'cotiz', 'econom', 'precio', 'propuesta']
+PALABRAS_EXCLUIR_OFERTA = [
+    'registro', 'mercantil', 'tss', 'dgii', 'constancia',
+    'tecnic', 'rpe', 'rnc', 'cedula', 'pasaporte',
+    'balance', 'financ', 'declaracion'
+]
+
+
+def _es_oferta_economica(nombre_pdf):
+    """Decide si un PDF de 3_Ofertas/ es una oferta económica."""
+    n = nombre_pdf.lower()
+    if 'ranl' in n:
+        return False
+    for palabra in PALABRAS_EXCLUIR_OFERTA:
+        if palabra in n:
+            return False
+    for palabra in PALABRAS_INCLUIR_OFERTA:
+        if palabra in n:
+            return True
+    if n in ('oferta.pdf', 'ofertas.pdf'):
+        return True
+    return True
+
+
+def _worker_descarga(lote_size, db_url):
+    """
+    Corre en background thread.
+    Para cada licitación adjudicada pendiente:
+      1. Descarga el ZIP con Playwright (reutiliza descargar_pliego)
+      2. Extrae PDFs de 3_Ofertas/ que sean ofertas económicas
+      3. Guarda los bytes del PDF en la tabla ofertas_pendientes
+    """
+    global _descarga_estado
+    _descarga_estado["corriendo"] = True
+    _descarga_estado["pdfs_guardados"] = 0
+    _descarga_estado["errores"] = 0
+    _descarga_estado["procesadas"] = 0
+    _descarga_estado["iniciado_en"] = datetime.now().strftime('%H:%M:%S')
+
+    try:
+        # Obtener licitaciones que aún no tienen PDFs en ofertas_pendientes
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT l.id, l.referencia, l.descripcion
+            FROM   licitaciones l
+            WHERE  l.estado = 'Proceso adjudicado y celebrado'
+              AND  NOT EXISTS (
+                       SELECT 1 FROM ofertas_pendientes op
+                       WHERE  op.licitacion_id = l.id
+                   )
+            ORDER  BY l.id
+            LIMIT  %s
+        """, (lote_size,))
+        pendientes = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        _descarga_estado["total"] = len(pendientes)
+        _descarga_estado["ultimo_mensaje"] = f"{len(pendientes)} licitaciones pendientes"
+        print(f"DESCARGA BACKFILL: {len(pendientes)} licitaciones")
+
+        for (lid, referencia, descripcion) in pendientes:
+            _descarga_estado["ultimo_mensaje"] = f"Descargando {referencia}..."
+            print(f"\n[{lid}] {referencia}")
+
+            try:
+                nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+                zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
+                os.makedirs(TEMP_DIR, exist_ok=True)
+
+                # Reusar ZIP en caché si existe y es reciente
+                zip_en_cache = (
+                    os.path.exists(zip_path) and
+                    (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
+                )
+                if not zip_en_cache:
+                    descargar_pliego(referencia, guardar_zip=True)
+
+                if not os.path.exists(zip_path):
+                    print(f"  ZIP no disponible")
+                    _descarga_estado["errores"] += 1
+                    _descarga_estado["procesadas"] += 1
+                    continue
+
+                # Extraer PDFs de ofertas del ZIP y guardar en Neon
+                pdfs_guardados_esta = 0
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    pdfs_oferta = [
+                        a for a in zf.namelist()
+                        if re.search(r'3_Ofer', a, re.IGNORECASE)
+                        and a.lower().endswith('.pdf')
+                        and _es_oferta_economica(os.path.basename(a))
+                    ]
+                    print(f"  PDFs de oferta encontrados: {len(pdfs_oferta)}")
+
+                    conn2 = psycopg2.connect(db_url)
+                    cur2 = conn2.cursor()
+
+                    for ruta_en_zip in pdfs_oferta:
+                        nombre_pdf = os.path.basename(ruta_en_zip)
+                        _descarga_estado["ultimo_mensaje"] = f"{referencia} → {nombre_pdf}"
+                        try:
+                            pdf_bytes = zf.read(ruta_en_zip)
+                            cur2.execute("""
+                                INSERT INTO ofertas_pendientes
+                                    (licitacion_id, referencia, nombre_procedimiento,
+                                     nombre_pdf, pdf_bytes)
+                                VALUES (%s, %s, %s, %s, %s)
+                                ON CONFLICT (licitacion_id, nombre_pdf) DO NOTHING
+                            """, (lid, referencia, descripcion, nombre_pdf,
+                                  psycopg2.Binary(pdf_bytes)))
+                            pdfs_guardados_esta += 1
+                            print(f"  💾 Guardado: {nombre_pdf}")
+                        except Exception as e:
+                            print(f"  ⚠️ Error guardando {nombre_pdf}: {e}")
+                            conn2.rollback()
+
+                    conn2.commit()
+                    cur2.close()
+                    conn2.close()
+
+                _descarga_estado["pdfs_guardados"] += pdfs_guardados_esta
+
+            except Exception as e:
+                print(f"  Error en {referencia}: {e}")
+                _descarga_estado["errores"] += 1
+
+            _descarga_estado["procesadas"] += 1
+
+        _descarga_estado["ultimo_mensaje"] = (
+            f"Completado: {_descarga_estado['procesadas']} licitaciones, "
+            f"{_descarga_estado['pdfs_guardados']} PDFs guardados, "
+            f"{_descarga_estado['errores']} errores"
+        )
+        print(f"\nDESCARGA COMPLETADA: {_descarga_estado['ultimo_mensaje']}")
+
+    except Exception as e:
+        _descarga_estado["ultimo_mensaje"] = f"Error fatal: {str(e)}"
+        print(f"DESCARGA ERROR FATAL: {e}")
+    finally:
+        _descarga_estado["corriendo"] = False
+
+
+@app.route('/iniciar-descarga-backfill', methods=['POST'])
+def iniciar_descarga_backfill():
+    """
+    Dispara la descarga de ZIPs en background.
+    Header requerido: X-Backfill-Token: <BACKFILL_SECRET>
+    Body JSON opcional: { "lote_size": 50 }
+    """
+    token   = request.headers.get('X-Backfill-Token', '')
+    secreto = os.environ.get('BACKFILL_SECRET', '')
+    if not secreto or token != secreto:
+        return jsonify({"error": "No autorizado"}), 401
+
+    if _descarga_estado["corriendo"]:
+        return jsonify({
+            "error": "Ya hay una descarga en curso",
+            "estado": _descarga_estado
+        }), 409
+
+    data      = request.get_json() or {}
+    lote_size = int(data.get('lote_size', 50))
+    db_url    = os.environ.get('DATABASE_URL')
+    if not db_url:
+        return jsonify({"error": "DATABASE_URL no configurada"}), 500
+
+    hilo = threading.Thread(
+        target=_worker_descarga,
+        args=(lote_size, db_url),
+        daemon=True
+    )
+    hilo.start()
+
+    return jsonify({
+        "status": "iniciado",
+        "lote_size": lote_size,
+        "mensaje": f"Descargando hasta {lote_size} licitaciones en background"
+    })
+
+
+@app.route('/descarga-backfill-status', methods=['GET'])
+def descarga_backfill_status():
+    """Consulta el progreso de la descarga en curso."""
+    token   = request.headers.get('X-Backfill-Token', '')
+    secreto = os.environ.get('BACKFILL_SECRET', '')
+    if not secreto or token != secreto:
+        return jsonify({"error": "No autorizado"}), 401
+    return jsonify(_descarga_estado)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
