@@ -1169,7 +1169,7 @@ PALABRAS_EXCLUIR_OFERTA = [
 def _es_oferta_economica(nombre_pdf):
     """Decide si un PDF de 3_Ofertas/ es una oferta económica."""
     n = nombre_pdf.lower()
-    if 'ranl' in n:
+    if 'ranl' in n and 'resumen' not in n:
         return False
     for palabra in PALABRAS_EXCLUIR_OFERTA:
         if palabra in n:
