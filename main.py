@@ -1210,15 +1210,15 @@ def _worker_descarga(lote_size, db_url):
                        WHERE  op.licitacion_id = l.id
                    )
               AND (
-                  l.descripcion ILIKE '%reactivo%'
-                  OR l.descripcion ILIKE '%laboratorio%'
-                  OR l.descripcion ILIKE '%calibr%'
-                  OR l.descripcion ILIKE '%microbiolog%'
-                  OR l.descripcion ILIKE '%instrumento%'
-                  OR l.descripcion ILIKE '%quimico%'
-                  OR l.descripcion ILIKE '%medicamento%'
-                  OR l.descripcion ILIKE '%insumo%'
-                  OR l.descripcion ILIKE '%material medico%'
+                  l.descripcion ILIKE '%%reactivo%%'
+                  OR l.descripcion ILIKE '%%laboratorio%%'
+                  OR l.descripcion ILIKE '%%calibr%%'
+                  OR l.descripcion ILIKE '%%microbiolog%%'
+                  OR l.descripcion ILIKE '%%instrumento%%'
+                  OR l.descripcion ILIKE '%%quimico%%'
+                  OR l.descripcion ILIKE '%%medicamento%%'
+                  OR l.descripcion ILIKE '%%insumo%%'
+                  OR l.descripcion ILIKE '%%material medico%%'
               )
             ORDER  BY l.id
             LIMIT  %s
