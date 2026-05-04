@@ -1360,6 +1360,162 @@ def descarga_backfill_status():
         return jsonify({"error": "No autorizado"}), 401
     return jsonify(_descarga_estado)
 
+@app.route('/organizador-oferta', methods=['POST'])
+def organizador_oferta():
+    try:
+        data          = request.get_json()
+        empresa_id    = data.get('empresa_id')
+        referencia    = data.get('referencia')
+        licitacion    = data.get('licitacion', {})
+        dictamen      = data.get('dictamen', {})
+
+        if not referencia or not licitacion or not dictamen:
+            return jsonify({'success': False, 'error': 'referencia, licitacion y dictamen son requeridos'}), 400
+
+        # Leer descripción de la empresa desde Neon
+        empresa_desc = ''
+        db_url = os.environ.get('DATABASE_URL')
+        if db_url and empresa_id:
+            try:
+                conn = psycopg2.connect(db_url)
+                cur  = conn.cursor()
+                cur.execute('SELECT descripcion FROM empresas WHERE id = %s LIMIT 1', (empresa_id,))
+                fila = cur.fetchone()
+                if fila:
+                    empresa_desc = fila[0] or ''
+                cur.close()
+                conn.close()
+            except Exception as e:
+                print(f'Error leyendo empresa: {e}')
+
+        # Leer análisis del pliego si existe
+        analisis_pliego = None
+        if db_url and empresa_id:
+            try:
+                conn = psycopg2.connect(db_url)
+                cur  = conn.cursor()
+                cur.execute(
+                    'SELECT analisis_json FROM analisis_pliegos WHERE empresa_id = %s AND referencia = %s LIMIT 1',
+                    (empresa_id, referencia)
+                )
+                fila = cur.fetchone()
+                if fila:
+                    analisis_pliego = json.loads(fila[0])
+                cur.close()
+                conn.close()
+            except Exception as e:
+                print(f'Error leyendo analisis_pliegos: {e}')
+
+        # Construir sección del pliego
+        if analisis_pliego:
+            requisitos = analisis_pliego.get('requisitos', [])[:5]
+            req_texto  = '\n'.join(f'- {r}' for r in requisitos) if requisitos else '- No disponible'
+            garantias  = analisis_pliego.get('viabilidad', {}).get('garantias', 'No especificado')
+            experiencia = analisis_pliego.get('viabilidad', {}).get('experiencia_previa', 'No especificado')
+            seccion_pliego = f"""REQUISITOS DEL PLIEGO:
+{req_texto}
+Garantías exigidas: {garantias}
+Experiencia previa: {experiencia}"""
+        else:
+            seccion_pliego = 'ANÁLISIS DEL PLIEGO: No disponible — usar descripción de la licitación como referencia.'
+
+        # Construir sección del dictamen
+        condiciones = dictamen.get('condiciones', [])
+        condiciones_texto = '\n'.join(
+            f"- {'[URGENTE] ' if c.get('urgente') else ''}{c.get('texto', '')}"
+            for c in condiciones
+        )
+
+        monto_fmt = f"RD${float(licitacion.get('monto', 0)):,.0f}"
+
+        prompt = f"""Eres el Organizador de Oferta de Compita. Genera un plan de trabajo estructurado para que una empresa licitadora participe en una licitación pública específica de República Dominicana.
+
+El output será pegado directamente en KanbanBonsai para generar un Bonsai con 5 sprints. Cada hoja (tarea) debe ser concreta, accionable y específica para ESTA licitación — no genérica.
+
+LICITACIÓN:
+- Referencia: {referencia}
+- Descripción: {licitacion.get('descripcion', '')}
+- Entidad: {licitacion.get('entidad', '')}
+- Tipo de proceso: {licitacion.get('tipo', '')}
+- Monto estimado: {monto_fmt}
+- Días disponibles: {licitacion.get('diasDisponibles', '')}
+- Fecha límite: {licitacion.get('fecha_presentacion', 'No especificada')}
+
+EMPRESA LICITADORA:
+{empresa_desc}
+
+VEREDICTO DEL COACH: {dictamen.get('veredicto', '')}
+CONDICIONES A ATENDER:
+{condiciones_texto}
+
+{seccion_pliego}
+
+Responde ÚNICAMENTE con este formato, sin texto adicional ni explicaciones:
+
+PROYECTO: [nombre del Bonsai, máximo 8 palabras, específico para esta licitación]
+DESCRIPCIÓN: [2 líneas sobre el objetivo de este plan de oferta]
+
+SPRINT 1 — Análisis y Evaluación
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+
+SPRINT 2 — Documentación Legal
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+
+SPRINT 3 — Oferta Técnica
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+
+SPRINT 4 — Oferta Económica
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+
+SPRINT 5 — Entrega y Seguimiento
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]
+- [tarea específica para esta licitación]"""
+
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ANTHROPIC_API_KEY no configurada'}), 500
+
+        print(f'Generando plan de oferta para {referencia}...')
+        response = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01'
+            },
+            json={
+                'model': 'claude-sonnet-4-20250514',
+                'max_tokens': 1200,
+                'messages': [{'role': 'user', 'content': prompt}]
+            },
+            timeout=90
+        )
+
+        if response.status_code != 200:
+            raise Exception(f'Error Claude API: {response.status_code}')
+
+        plan_generado = response.json()['content'][0]['text'].strip()
+        print(f'Plan generado: {len(plan_generado)} caracteres')
+
+        return jsonify({'success': True, 'prompt': plan_generado})
+
+    except Exception as e:
+        print(f'Error en organizador-oferta: {str(e)}')
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
