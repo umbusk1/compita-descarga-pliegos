@@ -1807,7 +1807,7 @@ def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, emp
             monto_fmt = f"RD${float(monto_val):,.0f}"
         except Exception:
             monto_fmt = str(monto_val)
-        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitación.
+        prompt = f"""Genera un plan de trabajo para gerenciarlo en KanbanBonsai con 5 sprints para esta licitación.
 
 LICITACIÓN: {referencia} — {licitacion.get('descripcion', '')}
 ENTIDAD: {licitacion.get('entidad', '')}
@@ -2242,7 +2242,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 
 <div class="legend">
   <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3B6D11;margin-right:5px;vertical-align:middle;"></span>Claude — ya completado</span>
-  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#BA7517;margin-right:5px;vertical-align:middle;"></span>Humano — por hacer en KanbanBonsai</span>
+  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#BA7517;margin-right:5px;vertical-align:middle;"></span>Humano — por hacer, con seguimiento usando KanbanBonsai</span>
 </div>
 
 {s1}
