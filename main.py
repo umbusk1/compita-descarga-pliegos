@@ -1807,7 +1807,7 @@ def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, emp
             monto_fmt = f"RD${float(monto_val):,.0f}"
         except Exception:
             monto_fmt = str(monto_val)
-        prompt = f"""Genera un plan de trabajo para gerenciarlo en KanbanBonsai con 5 sprints para esta licitación.
+        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitación.
 
 LICITACIÓN: {referencia} — {licitacion.get('descripcion', '')}
 ENTIDAD: {licitacion.get('entidad', '')}
@@ -2242,7 +2242,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 
 <div class="legend">
   <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#3B6D11;margin-right:5px;vertical-align:middle;"></span>Claude — ya completado</span>
-  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#BA7517;margin-right:5px;vertical-align:middle;"></span>Humano — por hacer, con seguimiento usando KanbanBonsai</span>
+  <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#BA7517;margin-right:5px;vertical-align:middle;"></span>Humano — por hacer en KanbanBonsai</span>
 </div>
 
 {s1}
@@ -2266,7 +2266,22 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 </div>
 <script>
 var kp={kanban_json};
-function abrirKanban(){{if(kp){{try{{navigator.clipboard.writeText(kp)}}catch(e){{}}}}window.open('https://kanban.umbusk.com/bonsais','_blank');}}
+function abrirKanban(){{
+  if(kp){{
+    try{{navigator.clipboard.writeText(kp);}}catch(e){{}}
+    // Mostrar instrucción antes de abrir KanbanBonsai
+    var toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:14px 22px;border-radius:10px;font-size:13px;line-height:1.6;max-width:360px;text-align:center;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
+    toast.innerHTML = '✅ Plan copiado al portapapeles<br><span style="color:#9CA3AF;font-size:12px;">En KanbanBonsai haz clic en <strong style="color:#fff;">Generar con IA</strong> y pega con Ctrl+V</span>';
+    document.body.appendChild(toast);
+    setTimeout(function(){{
+      window.open('https://kanban.umbusk.com/bonsais','_blank');
+      setTimeout(function(){{toast.remove();}}, 3000);
+    }}, 1500);
+  }} else {{
+    window.open('https://kanban.umbusk.com/bonsais','_blank');
+  }}
+}}
 </script>
 </body>
 </html>'''
@@ -2408,7 +2423,7 @@ def generar_reporte():
         print(f"  {len(precios)} precios encontrados")
 
         # ── PASO 7: Mapeo catálogo ────────────────────────────────────────────
-        mapeo      = None
+        mapeo     = None
         requisitos = (analisis_pliego or {}).get('requisitos', [])
         if empresa_desc and requisitos:
             print("PASO 7: Mapeando catálogo vs. pliego...")
@@ -2420,42 +2435,22 @@ def generar_reporte():
             referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key
         )
 
-        # ── PASO 9: Generar HTML ──────────────────────────────────────────────
+        # ── PASO 9: Generar y guardar HTML ────────────────────────────────────
         print("PASO 9: Generando HTML del Reporte...")
         datos = {
-            'licitacion':         licitacion,
-            'dictamen':           dictamen,
-            'analisis_pliego':    analisis_pliego,
-            'perfil_licitador':   perfil,
-            'mapeo_catalogo':     mapeo,
+            'licitacion':        licitacion,
+            'dictamen':          dictamen,
+            'analisis_pliego':   analisis_pliego,
+            'perfil_licitador':  perfil,
+            'mapeo_catalogo':    mapeo,
             'precios_historicos': precios,
-            'kanban_prompt':      kanban_prompt,
-            'f033_url':           f033_url,
+            'kanban_prompt':     kanban_prompt,
+            'f033_url':          f033_url,
         }
         html = generar_html_reporte(referencia, datos)
 
-        # Guardar en /tmp/ para servir rápido
         with open(ruta_reporte, 'w', encoding='utf-8') as f:
             f.write(html)
-
-        # Guardar en Neon para persistencia (sobrevive reinicios de Railway)
-        if db_url:
-            try:
-                conn = psycopg2.connect(db_url)
-                cur  = conn.cursor()
-                cur.execute("""
-                    INSERT INTO reportes (referencia, empresa_id, html_content)
-                    VALUES (%s, %s, %s)
-                    ON CONFLICT (referencia, empresa_id)
-                    DO UPDATE SET html_content = EXCLUDED.html_content,
-                                  created_at   = NOW()
-                """, (referencia, empresa_id, html))
-                conn.commit()
-                cur.close()
-                conn.close()
-                print("  Reporte guardado en Neon ✓")
-            except Exception as e:
-                print(f"  Error guardando reporte en Neon: {e}")
 
         url = f"https://{dominio}/reporte/{nombre_seguro}"
         print(f"══ Reporte listo: {url} ══\n")
@@ -2484,36 +2479,9 @@ def servir_f033(nombre_seguro):
 def servir_reporte(nombre_seguro):
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', nombre_seguro)
     ruta = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
-
-    # Servir desde /tmp/ si existe
-    if os.path.exists(ruta):
-        return send_file(ruta, mimetype='text/html')
-
-    # Fallback: buscar en Neon
-    db_url = os.environ.get('DATABASE_URL')
-    if db_url:
-        try:
-            referencia = nombre_seguro.replace('_', '-')
-            conn = psycopg2.connect(db_url)
-            cur  = conn.cursor()
-            cur.execute(
-                'SELECT html_content FROM reportes WHERE referencia = %s ORDER BY created_at DESC LIMIT 1',
-                (referencia,)
-            )
-            fila = cur.fetchone()
-            cur.close()
-            conn.close()
-            if fila:
-                # Restaurar en /tmp/ para peticiones futuras
-                os.makedirs(REPORTES_DIR, exist_ok=True)
-                with open(ruta, 'w', encoding='utf-8') as f:
-                    f.write(fila[0])
-                return fila[0], 200, {'Content-Type': 'text/html; charset=utf-8'}
-        except Exception as e:
-            print(f"Error buscando reporte en Neon: {e}")
-
-    return "Reporte no encontrado. Genéralo desde Compita.", 404
-
+    if not os.path.exists(ruta):
+        return "Reporte no encontrado. Genéralo desde Compita.", 404
+    return send_file(ruta, mimetype='text/html')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
