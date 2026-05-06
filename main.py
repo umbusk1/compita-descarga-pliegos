@@ -1524,11 +1524,6 @@ REPORTES_DIR = "/tmp/reportes"
 
 
 def mapear_catalogo_con_claude(empresa_desc, requisitos, api_key):
-    """
-    Cruza requisitos del pliego contra descripción de la empresa.
-    Retorna dict con compatibles/requieren_proveedor, o None si no hay datos.
-    PRINCIPIO: si no puede determinarlo, retorna sin_informacion_suficiente=True.
-    """
     if not empresa_desc or not requisitos:
         return None
     prompt = f"""Analiza si esta empresa puede suplir los requisitos de una licitación pública.
@@ -1546,8 +1541,8 @@ Responde ÚNICAMENTE con JSON válido, sin texto adicional:
   "sin_informacion_suficiente": false
 }}
 
-REGLA: Si la descripción de la empresa no tiene suficiente detalle para determinar
-compatibilidad, pon sin_informacion_suficiente: true y listas vacías. No inventes."""
+REGLA: Si la descripción de la empresa no tiene suficiente detalle,
+pon sin_informacion_suficiente: true y listas vacías. No inventes."""
     try:
         resp = requests.post(
             'https://api.anthropic.com/v1/messages',
@@ -1578,10 +1573,6 @@ compatibilidad, pon sin_informacion_suficiente: true y listas vacías. No invent
 
 
 def obtener_estado_perfil_licitador(empresa_id, db_url):
-    """
-    Clasifica documentos del Perfil Licitador por estado.
-    Retorna dict con listas, o None si no hay datos.
-    """
     if not db_url or not empresa_id:
         return None
     try:
@@ -1629,13 +1620,98 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
         return None
 
 
-def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key):
-    """
-    Genera el prompt para KanbanBonsai.
-    Retorna string con el plan de 5 sprints, o '' si falla.
-    """
+def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key):
+    """Ejecuta análisis de pliego sobre un PDF ya descargado."""
     try:
-        requisitos = analisis_pliego.get('requisitos', [])[:5] if analisis_pliego else []
+        reader = PdfReader(pdf_path)
+        texto_completo = ""
+        for pg in reader.pages:
+            try:
+                t = pg.extract_text()
+                if t:
+                    texto_completo += t + "\n\n"
+            except Exception:
+                continue
+        if not texto_completo.strip():
+            return None
+        if len(texto_completo) > 100000:
+            texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
+
+        fecha_hoy = datetime.now().strftime('%d/%m/%Y')
+        perfil_txt = f"\nDescripcion: {empresa_desc}" if empresa_desc else ""
+        prompt = f"""Eres un experto analista de licitaciones publicas dominicanas.
+
+CONTEXTO:
+- Referencia: {referencia}
+- Titulo: {titulo}
+{perfil_txt}
+
+---INICIO DEL PLIEGO---
+{texto_completo}
+---FIN DEL PLIEGO---
+
+Analiza el pliego y responde SOLO con este JSON:
+{{
+  "sintesis": "Resumen ejecutivo en 2-3 oraciones",
+  "oportunidades": ["oportunidad 1", "oportunidad 2"],
+  "riesgos": ["riesgo 1", "riesgo 2"],
+  "requisitos": ["requisito 1", "requisito 2", "requisito 3"],
+  "certificaciones_iso": {{
+    "exige_iso": "SI o NO",
+    "listado": [],
+    "nota": ""
+  }},
+  "tiempos": {{
+    "fecha_limite_oferta": "DD/MM/YYYY",
+    "dias_calendario_restantes": "N dias",
+    "alerta": "HOLGADO, AJUSTADO, o MUY AJUSTADO",
+    "fechas_clave": [],
+    "advertencia": ""
+  }},
+  "viabilidad": {{
+    "veredicto": "VIABLE, VIABLE CON RIESGOS, o DIFICIL DE CUMPLIR",
+    "garantias": "descripcion de garantias",
+    "experiencia_previa": "experiencia requerida",
+    "especificaciones_tecnicas": "compatibilidad"
+  }},
+  "evaluacion": {{
+    "a_favor": [],
+    "en_contra": []
+  }},
+  "precios_historicos": []
+}}"""
+
+        resp = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': api_key,
+                'anthropic-version': '2023-06-01'
+            },
+            json={
+                'model': 'claude-sonnet-4-20250514',
+                'max_tokens': 3000,
+                'messages': [{'role': 'user', 'content': prompt}]
+            },
+            timeout=90
+        )
+        if resp.status_code != 200:
+            return None
+        texto_resp = resp.json()['content'][0]['text']
+        texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
+        inicio = texto_resp.find('{')
+        fin = texto_resp.rfind('}')
+        if inicio == -1 or fin == -1:
+            return None
+        return json.loads(texto_resp[inicio:fin+1])
+    except Exception as e:
+        print(f'Error en analisis desde cache: {e}')
+        return None
+
+
+def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key):
+    try:
+        requisitos = (analisis_pliego or {}).get('requisitos', [])[:5]
         req_texto = '\n'.join(f'- {r}' for r in requisitos) or '- No disponible'
         garantias = (analisis_pliego or {}).get('viabilidad', {}).get('garantias', 'No especificado')
         condiciones_texto = '\n'.join(
@@ -1647,20 +1723,18 @@ def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, emp
             monto_fmt = f"RD${float(monto_val):,.0f}"
         except Exception:
             monto_fmt = str(monto_val)
-        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitación específica.
+        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitación.
 
 LICITACIÓN: {referencia} — {licitacion.get('descripcion', '')}
 ENTIDAD: {licitacion.get('entidad', '')}
 TIPO: {licitacion.get('tipo', '')} · MONTO: {monto_fmt} · DÍAS: {licitacion.get('diasDisponibles', '')}
 EMPRESA: {empresa_desc}
-VEREDICTO COACH: {dictamen.get('veredicto', '')}
-CONDICIONES:
+COACH: {dictamen.get('veredicto', '')}
 {condiciones_texto}
-REQUISITOS DEL PLIEGO:
-{req_texto}
+REQUISITOS: {req_texto}
 GARANTÍAS: {garantias}
 
-Responde ÚNICAMENTE con este formato, sin texto adicional:
+Responde ÚNICAMENTE con este formato:
 
 PROYECTO: [nombre específico, máximo 8 palabras]
 DESCRIPCIÓN: [2 líneas sobre el objetivo]
@@ -1716,19 +1790,18 @@ SPRINT 5 — Entrega y Seguimiento
 
 
 def generar_html_reporte(referencia, datos):
-    """Genera el HTML completo del Reporte Compita."""
     licitacion = datos.get('licitacion', {})
-    dictamen = datos.get('dictamen', {})
-    analisis = datos.get('analisis_pliego')
-    perfil = datos.get('perfil_licitador')
-    mapeo = datos.get('mapeo_catalogo')
-    precios = datos.get('precios_historicos', [])
+    dictamen   = datos.get('dictamen', {})
+    analisis   = datos.get('analisis_pliego')
+    perfil     = datos.get('perfil_licitador')
+    mapeo      = datos.get('mapeo_catalogo')
+    precios    = datos.get('precios_historicos', [])
     kanban_prompt = datos.get('kanban_prompt', '')
     fecha_generado = datetime.now().strftime('%d %b %Y · %H:%M')
 
     veredicto = dictamen.get('veredicto', 'GO')
-    color_veredicto = {'GO': '#3B6D11', 'GO_RIESGO': '#f2b56b', 'NO_GO': '#DC2626'}.get(veredicto, '#3B6D11')
-    label_veredicto = {'GO': 'GO', 'GO_RIESGO': 'GO con riesgo', 'NO_GO': 'NO GO'}.get(veredicto, veredicto)
+    color_v = {'GO': '#3B6D11', 'GO_RIESGO': '#f2b56b', 'NO_GO': '#DC2626'}.get(veredicto, '#3B6D11')
+    label_v = {'GO': 'GO', 'GO_RIESGO': 'GO con riesgo', 'NO_GO': 'NO GO'}.get(veredicto, veredicto)
 
     monto_val = licitacion.get('monto', 0)
     try:
@@ -1739,35 +1812,170 @@ def generar_html_reporte(referencia, datos):
     fecha_lim = licitacion.get('fecha_presentacion', '')
     fecha_lim_corta = fecha_lim[:10] if fecha_lim else '—'
 
-    # Sección 1: Síntesis
-    if analisis and analisis.get('sintesis'):
-        s1 = f'''<div class="sec">
-  <div class="sec-hdr"><span class="sec-ttl">1. Síntesis del pliego</span><span class="bdg-ok">Completado por Claude</span></div>
-  <p class="sec-txt">{analisis["sintesis"]}</p>
-</div>'''
-    else:
-        s1 = '<div class="sec"><div class="sec-hdr"><span class="sec-ttl">1. Síntesis del pliego</span><span class="bdg-warn">Sin datos</span></div><p class="sec-txt muted">Análisis del pliego no disponible.</p></div>'
+    def t_ok(txt, link=None):
+        a = f' — <a href="#{link}" style="color:#3B6D11;font-size:11px;">ver detalle</a>' if link else ''
+        return f'<div class="task"><span class="dot green"></span><span class="task-txt">{txt}{a}</span></div>'
 
-    # Sección 2: Mapeo catálogo
+    def t_pend(txt):
+        return f'<div class="task"><span class="dot gray"></span><span class="task-txt muted">{txt}</span></div>'
+
+    def t_human(txt):
+        return f'<div class="task"><span class="dot amber"></span><span class="task-txt">{txt}</span></div>'
+
+    def sprint_sec(num, nombre, claude_tasks, human_tasks):
+        return f'''<div class="sec">
+  <div class="sec-hdr">
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span class="sprint-num">Sprint {num}</span>
+      <span class="sec-ttl">{nombre}</span>
+    </div>
+    <div style="font-size:11px;color:#6B7280;">
+      <span style="color:#3B6D11;">● {len(claude_tasks)} Claude</span>
+      &nbsp;
+      <span style="color:#BA7517;">● {len(human_tasks)} por hacer</span>
+    </div>
+  </div>
+  <div class="tasks">{"".join(claude_tasks + human_tasks)}</div>
+</div>'''
+
+    # ── Sprint 1: Análisis y Evaluación ──────────────────────────────────────
+    c1, h1 = [], []
+    if analisis and analisis.get('sintesis'):
+        c1.append(t_ok('Análisis del pliego completado', 'sintesis'))
+    else:
+        c1.append(t_pend('Análisis del pliego — no ejecutado aún'))
+
+    if mapeo and not mapeo.get('sin_informacion_suficiente'):
+        nc = len(mapeo.get('compatibles', []))
+        np = len(mapeo.get('requieren_proveedor', []))
+        c1.append(t_ok(f'Mapeo catálogo vs. ítems — {nc} compatibles, {np} requieren proveedor', 'mapeo'))
+    elif mapeo and mapeo.get('sin_informacion_suficiente'):
+        c1.append(t_pend('Mapeo catálogo — descripción de empresa insuficiente para cruzar'))
+    else:
+        c1.append(t_pend('Mapeo catálogo vs. ítems requeridos'))
+
+    h1.append(t_human('Confirmar disponibilidad real de ítems con proveedor externo'))
+    h1.append(t_human('Validar fortaleza de candidatura y decidir participación final'))
+    s1 = sprint_sec('1', 'Análisis y Evaluación', c1, h1)
+
+    # ── Sprint 2: Documentación Legal ────────────────────────────────────────
+    c2, h2 = [], []
+    if perfil:
+        nv = len(perfil.get('vigentes', [])) + len(perfil.get('permanentes', []))
+        nve = len(perfil.get('vencidos', []))
+        npv = len(perfil.get('por_vencer', []))
+        resumen = f'{nv} vigentes'
+        if nve: resumen += f', {nve} vencidos'
+        if npv: resumen += f', {npv} por vencer'
+        c2.append(t_ok(f'Estado del Perfil Licitador — {resumen}', 'perfil'))
+    else:
+        c2.append(t_pend('Estado del Perfil Licitador — no configurado en Compita'))
+
+    if analisis and analisis.get('certificaciones_iso'):
+        certs = analisis['certificaciones_iso']
+        if certs.get('exige_iso') == 'SI':
+            lista_cert = ', '.join(certs.get('listado', [])) or 'ver análisis'
+            c2.append(t_ok(f'Certificaciones exigidas: {lista_cert}'))
+        else:
+            c2.append(t_ok('Certificaciones exigidas identificadas: ninguna ISO'))
+    else:
+        c2.append(t_pend('Certificaciones exigidas del pliego'))
+
+    if perfil:
+        if perfil.get('vencidos'):
+            h2.append(t_human(f'Renovar {len(perfil["vencidos"])} documento(s) vencido(s)'))
+        if perfil.get('por_vencer'):
+            h2.append(t_human(f'Gestionar {len(perfil["por_vencer"])} documento(s) por vencer'))
+        if perfil.get('sin_fecha'):
+            h2.append(t_human(f'Registrar fecha de {len(perfil["sin_fecha"])} documento(s) sin fecha'))
+    else:
+        h2.append(t_human('Completar Perfil Licitador en Compita'))
+
+    garantias_txt = (analisis or {}).get('viabilidad', {}).get('garantias', '')
+    if garantias_txt:
+        h2.append(t_human(f'Tramitar garantía: {garantias_txt[:70]}'))
+    else:
+        h2.append(t_human('Tramitar garantía de seriedad con banco o aseguradora'))
+    h2.append(t_human('Compilar y verificar expediente legal completo'))
+    s2 = sprint_sec('2', 'Documentación Legal', c2, h2)
+
+    # ── Sprint 3: Oferta Técnica ──────────────────────────────────────────────
+    c3, h3 = [], []
+    if analisis and analisis.get('requisitos'):
+        c3.append(t_ok(f'{len(analisis["requisitos"])} especificaciones técnicas extraídas del pliego', 'checklist'))
+    else:
+        c3.append(t_pend('Especificaciones técnicas del pliego'))
+    c3.append(t_pend('Borrador de propuesta técnica — próximamente'))
+
+    h3.append(t_human('Confirmar cumplimiento técnico producto a producto'))
+    h3.append(t_human('Reunir fichas técnicas de fabricantes para ítems requeridos'))
+    h3.append(t_human('Revisar y aprobar borrador técnico antes de presentar'))
+    s3 = sprint_sec('3', 'Oferta Técnica', c3, h3)
+
+    # ── Sprint 4: Oferta Económica ────────────────────────────────────────────
+    c4, h4 = [], []
+    if precios:
+        c4.append(t_ok(f'{len(precios)} precios históricos de referencia encontrados', 'precios'))
+    else:
+        c4.append(t_pend('Precios históricos — sin datos en Compita para estos ítems'))
+
+    c4.append(t_pend('F033 pre-llenado (Agente 033) — disponible desde Compita'))
+
+    if analisis and analisis.get('viabilidad'):
+        c4.append(t_ok('Política de ITBIS del pliego identificada'))
+    else:
+        c4.append(t_pend('Política de ITBIS del pliego'))
+
+    h4.append(t_human('Definir precios finales ítem por ítem en el F033'))
+    h4.append(t_human('Aprobar monto total y margen antes de presentar'))
+    s4 = sprint_sec('4', 'Oferta Económica', c4, h4)
+
+    # ── Sprint 5: Entrega y Seguimiento ──────────────────────────────────────
+    c5, h5 = [], []
+    if analisis and analisis.get('requisitos'):
+        c5.append(t_ok('Checklist de requisitos de entrega generado', 'checklist'))
+    else:
+        c5.append(t_pend('Checklist de requisitos de entrega'))
+
+    fecha_pliego = (analisis or {}).get('tiempos', {}).get('fecha_limite_oferta', '')
+    fecha_show = fecha_pliego or fecha_lim_corta
+    if fecha_show and fecha_show != '—':
+        c5.append(t_ok(f'Fecha límite confirmada: {fecha_show}'))
+    else:
+        c5.append(t_pend('Fecha límite — verificar en el pliego'))
+
+    h5.append(t_human('Firmar y autenticar documentos que lo requieran'))
+    h5.append(t_human(f'Ensamblar y entregar expediente antes del {fecha_show}'))
+    h5.append(t_human('Obtener constancia de recepción'))
+    s5 = sprint_sec('5', 'Entrega y Seguimiento', c5, h5)
+
+    # ── Secciones de detalle ──────────────────────────────────────────────────
+    det_sintesis = ''
+    if analisis and analisis.get('sintesis'):
+        riesgos_li = ''.join(f'<li>{r}</li>' for r in (analisis.get('riesgos') or [])[:3])
+        opcs_li = ''.join(f'<li>{o}</li>' for o in (analisis.get('oportunidades') or [])[:3])
+        det_sintesis = f'''<div class="sec" id="sintesis">
+  <div class="sec-hdr"><span class="sec-ttl">Síntesis del pliego</span><span class="bdg-ok">Claude</span></div>
+  <p class="sec-txt">{analisis["sintesis"]}</p>
+  {"<div class='grid2'><div class='card-green'><strong>Oportunidades</strong><ul class='ul-items'>" + opcs_li + "</ul></div><div class='card-amber'><strong>Riesgos</strong><ul class='ul-items'>" + riesgos_li + "</ul></div></div>" if opcs_li or riesgos_li else ""}
+</div>'''
+
+    det_mapeo = ''
     if mapeo and not mapeo.get('sin_informacion_suficiente'):
         compat = mapeo.get('compatibles', [])
-        proveed = mapeo.get('requieren_proveedor', [])
+        prov = mapeo.get('requieren_proveedor', [])
         li_c = ''.join(f'<li>{i}</li>' for i in compat) or '<li>No determinado</li>'
-        li_p = ''.join(f'<li>{i}</li>' for i in proveed)
-        card_p = f'<div class="card-amber"><strong>{len(proveed)} requieren proveedor</strong><ul class="ul-items">{li_p}</ul></div>' if proveed else ''
-        s2 = f'''<div class="sec">
-  <div class="sec-hdr"><span class="sec-ttl">2. Mapeo catálogo vs. ítems requeridos</span><span class="bdg-ok">Completado por Claude</span></div>
+        li_p = ''.join(f'<li>{i}</li>' for i in prov)
+        card_p = f'<div class="card-amber"><strong>{len(prov)} requieren proveedor</strong><ul class="ul-items">{li_p}</ul></div>' if prov else ''
+        det_mapeo = f'''<div class="sec" id="mapeo">
+  <div class="sec-hdr"><span class="sec-ttl">Mapeo catálogo vs. ítems</span><span class="bdg-ok">Claude</span></div>
   <div class="grid2">
-    <div class="card-green"><strong>{len(compat)} ítems compatibles</strong><ul class="ul-items">{li_c}</ul></div>
+    <div class="card-green"><strong>{len(compat)} compatibles</strong><ul class="ul-items">{li_c}</ul></div>
     {card_p}
   </div>
 </div>'''
-    elif mapeo and mapeo.get('sin_informacion_suficiente'):
-        s2 = '<div class="sec"><div class="sec-hdr"><span class="sec-ttl">2. Mapeo catálogo vs. ítems requeridos</span><span class="bdg-warn">Requiere revisión manual</span></div><p class="sec-txt muted">Descripción de empresa insuficiente para cruzar automáticamente.</p></div>'
-    else:
-        s2 = '<div class="sec"><div class="sec-hdr"><span class="sec-ttl">2. Mapeo catálogo vs. ítems requeridos</span><span class="bdg-warn">Sin datos</span></div><p class="sec-txt muted">No fue posible realizar el mapeo.</p></div>'
 
-    # Sección 3: Perfil Licitador
+    det_perfil = ''
     if perfil:
         filas = ''
         for d in perfil['vigentes']:
@@ -1778,14 +1986,9 @@ def generar_html_reporte(referencia, datos):
             filas += f'<tr><td>{d}</td><td class="t-red">Vencido</td></tr>'
         for d in perfil['sin_fecha']:
             filas += f'<tr><td>{d}</td><td class="t-gray">Sin fecha</td></tr>'
-        s3 = f'''<div class="sec">
-  <div class="sec-hdr"><span class="sec-ttl">3. Estado del Perfil Licitador</span><span class="bdg-ok">Completado por Claude</span></div>
-  <table class="tbl"><tbody>{filas}</tbody></table>
-</div>'''
-    else:
-        s3 = '<div class="sec"><div class="sec-hdr"><span class="sec-ttl">3. Estado del Perfil Licitador</span><span class="bdg-warn">Sin datos</span></div><p class="sec-txt muted">Perfil Licitador no configurado.</p></div>'
+        det_perfil = f'<div class="sec" id="perfil"><div class="sec-hdr"><span class="sec-ttl">Perfil Licitador — detalle</span><span class="bdg-ok">Claude</span></div><table class="tbl"><tbody>{filas}</tbody></table></div>'
 
-    # Sección 4: Precios
+    det_precios = ''
     if precios:
         filas_p = ''
         for p in precios[:8]:
@@ -1796,29 +1999,24 @@ def generar_html_reporte(referencia, datos):
             refs = p.get('num_referencias', 0)
             mon = p.get('moneda', 'DOP')
             if prom:
-                filas_p += f'<tr><td>{desc}</td><td>{prom:,.2f} {mon}</td><td>{pmin:,.2f} – {pmax:,.2f}</td><td>{refs}</td></tr>'
-        s4 = f'''<div class="sec">
-  <div class="sec-hdr"><span class="sec-ttl">4. Precios de referencia históricos</span><span class="bdg-ok">Completado por Claude</span></div>
-  <p class="sec-txt muted" style="padding-bottom:0;">Basado en licitaciones adjudicadas en Compita.</p>
+                filas_p += f'<tr><td>{desc}</td><td>{prom:,.2f} {mon}</td><td>{pmin:,.2f}–{pmax:,.2f}</td><td>{refs}</td></tr>'
+        det_precios = f'''<div class="sec" id="precios">
+  <div class="sec-hdr"><span class="sec-ttl">Precios históricos de referencia</span><span class="bdg-ok">Claude</span></div>
+  <p class="sec-txt muted" style="padding-bottom:0;">Licitaciones adjudicadas en Compita. Referencia solamente — no son precios finales.</p>
   <table class="tbl price-tbl">
     <thead><tr><th>Descripción</th><th>Promedio</th><th>Rango</th><th>Refs.</th></tr></thead>
     <tbody>{filas_p}</tbody>
   </table>
 </div>'''
-    else:
-        s4 = '<div class="sec"><div class="sec-hdr"><span class="sec-ttl">4. Precios de referencia históricos</span><span class="bdg-warn">Sin datos disponibles</span></div><p class="sec-txt muted">No hay precios históricos para ítems similares. Define precios desde cero.</p></div>'
 
-    # Sección 5: Checklist
+    det_checklist = ''
     if analisis and analisis.get('requisitos'):
-        items_req = ''.join(f'<li>☐ {r}</li>' for r in analisis['requisitos'][:8])
-        s5 = f'<div class="sec"><div class="sec-hdr"><span class="sec-ttl">5. Checklist de requisitos del pliego</span><span class="bdg-ok">Completado por Claude</span></div><ul class="checklist">{items_req}</ul></div>'
-    else:
-        s5 = ''
+        items_li = ''.join(f'<li>☐ {r}</li>' for r in analisis['requisitos'][:10])
+        det_checklist = f'<div class="sec" id="checklist"><div class="sec-hdr"><span class="sec-ttl">Checklist de requisitos del pliego</span><span class="bdg-ok">Claude</span></div><ul class="checklist">{items_li}</ul></div>'
 
-    # JSON-encode el kanban prompt para embeber seguro en JS
     kanban_json = json.dumps(kanban_prompt)
 
-    html = f'''<!DOCTYPE html>
+    return f'''<!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
@@ -1833,7 +2031,6 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 .hdr-label{{font-size:11px;color:#C0DD97;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}}
 .hdr-title{{font-size:17px;font-weight:600;color:#EAF3DE;margin-bottom:3px}}
 .hdr-sub{{font-size:13px;color:#97C459}}
-.hdr-btns{{display:flex;gap:8px;flex-wrap:wrap}}
 .btn-hdr{{padding:6px 12px;font-size:12px;background:#27500A;color:#C0DD97;border:1px solid #639922;border-radius:7px;cursor:pointer;text-decoration:none}}
 .stats{{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:8px}}
 .stat{{background:#27500A;border-radius:8px;padding:9px 11px}}
@@ -1841,9 +2038,18 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 .stat-v{{font-size:13px;font-weight:600;color:#EAF3DE}}
 .sec{{background:#fff;border-radius:12px;border:1px solid #E5E7EB;overflow:hidden;margin-bottom:.75rem}}
 .sec-hdr{{display:flex;justify-content:space-between;align-items:center;padding:9px 14px;background:#F9FAFB;border-bottom:1px solid #E5E7EB;flex-wrap:wrap;gap:6px}}
+.sprint-num{{font-size:11px;font-weight:600;background:#EAF3DE;color:#3B6D11;padding:2px 8px;border-radius:6px;white-space:nowrap}}
 .sec-ttl{{font-size:13px;font-weight:500}}
 .bdg-ok{{font-size:11px;background:#EAF3DE;color:#3B6D11;padding:2px 8px;border-radius:6px}}
-.bdg-warn{{font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 8px;border-radius:6px}}
+.tasks{{padding:10px 14px;display:flex;flex-direction:column;gap:6px}}
+.task{{display:flex;gap:10px;align-items:flex-start}}
+.dot{{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px}}
+.dot.green{{background:#3B6D11}}
+.dot.amber{{background:#BA7517}}
+.dot.gray{{background:#D1D5DB}}
+.task-txt{{font-size:13px;color:#374151;line-height:1.5}}
+.task-txt.muted{{color:#9CA3AF;font-style:italic}}
+.task-txt a{{color:#3B6D11;font-size:11px;text-decoration:none}}
 .sec-txt{{padding:11px 14px;font-size:13px;color:#374151;line-height:1.6}}
 .muted{{color:#9CA3AF!important;font-style:italic}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:11px 14px}}
@@ -1864,6 +2070,8 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 .footer-t{{font-size:13px;font-weight:500}}
 .footer-s{{font-size:12px;color:#6B7280;margin-top:2px}}
 .btn-kb{{padding:9px 18px;background:#3B6D11;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer}}
+.divider{{font-size:11px;font-weight:600;color:#6B7280;text-transform:uppercase;letter-spacing:.06em;margin:1rem 0 .6rem;padding-left:4px}}
+.legend{{font-size:12px;color:#6B7280;margin-bottom:.75rem;padding-left:4px;line-height:1.8}}
 .meta{{font-size:11px;color:#9CA3AF;text-align:center;padding-bottom:2rem}}
 @media print{{.btn-hdr,.btn-kb{{display:none}}body{{background:#fff}}}}
 </style>
@@ -1876,18 +2084,23 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
     <div>
       <div class="hdr-label">Reporte Compita</div>
       <div class="hdr-title">{referencia}</div>
-      <div class="hdr-sub">{licitacion.get("entidad","")[:50]} · {monto_fmt}</div>
+      <div class="hdr-sub">{licitacion.get("entidad","")[:60]} · {monto_fmt}</div>
     </div>
-    <div class="hdr-btns">
-      <a href="javascript:window.print()" class="btn-hdr">⬇ Descargar PDF</a>
-    </div>
+    <a href="javascript:window.print()" class="btn-hdr">⬇ Descargar PDF</a>
   </div>
   <div class="stats">
-    <div class="stat"><div class="stat-l">Veredicto Coach</div><div class="stat-v" style="color:{color_veredicto};">{label_veredicto}</div></div>
+    <div class="stat"><div class="stat-l">Veredicto Coach</div><div class="stat-v" style="color:{color_v};">{label_v}</div></div>
     <div class="stat"><div class="stat-l">Días disponibles</div><div class="stat-v">{licitacion.get("diasDisponibles","—")}</div></div>
     <div class="stat"><div class="stat-l">Tipo proceso</div><div class="stat-v">{licitacion.get("tipo","—")}</div></div>
     <div class="stat"><div class="stat-l">Fecha límite</div><div class="stat-v" style="font-size:11px;">{fecha_lim_corta}</div></div>
   </div>
+</div>
+
+<div class="divider">Plan de oferta — 5 sprints</div>
+<div class="legend">
+  <span style="color:#3B6D11;">●</span> Claude ya ejecutó &nbsp;
+  <span style="color:#BA7517;">●</span> Por hacer en KanbanBonsai &nbsp;
+  <span style="color:#D1D5DB;">●</span> Pendiente de activar
 </div>
 
 {s1}
@@ -1896,27 +2109,29 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 {s4}
 {s5}
 
+<div class="divider">Detalle — resultados de Claude</div>
+{det_sintesis}
+{det_mapeo}
+{det_perfil}
+{det_precios}
+{det_checklist}
+
 <div class="footer">
   <div>
     <div class="footer-t">Listo para trabajar en KanbanBonsai</div>
-    <div class="footer-s">El plan de oferta está preparado para tu equipo</div>
+    <div class="footer-s">El plan de 5 sprints está preparado para tu equipo</div>
   </div>
   <button class="btn-kb" onclick="abrirKanban()">Abrir en KanbanBonsai →</button>
 </div>
 
 <div class="meta">Generado por Claude · Compita · {fecha_generado}</div>
-
 </div>
 <script>
 var kp={kanban_json};
-function abrirKanban(){{
-  if(kp){{try{{navigator.clipboard.writeText(kp)}}catch(e){{}}}}
-  window.open('https://kanban.umbusk.com/bonsais','_blank');
-}}
+function abrirKanban(){{if(kp){{try{{navigator.clipboard.writeText(kp)}}catch(e){{}}}}window.open('https://kanban.umbusk.com/bonsais','_blank');}}
 </script>
 </body>
 </html>'''
-    return html
 
 
 @app.route('/generar-reporte', methods=['POST'])
@@ -1926,7 +2141,7 @@ def generar_reporte():
         empresa_id = data.get('empresa_id')
         referencia = data.get('referencia')
         licitacion = data.get('licitacion', {})
-        dictamen = data.get('dictamen', {})
+        dictamen   = data.get('dictamen', {})
 
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
@@ -1935,7 +2150,7 @@ def generar_reporte():
         os.makedirs(REPORTES_DIR, exist_ok=True)
         ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
 
-        # Verificar caché
+        # Verificar caché del reporte
         if os.path.exists(ruta_reporte):
             edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
             if edad_dias <= CACHE_DIAS:
@@ -1944,7 +2159,7 @@ def generar_reporte():
                 print(f"Reporte en caché: {url}")
                 return jsonify({'success': True, 'url': url, 'cached': True})
 
-        db_url = os.environ.get('DATABASE_URL')
+        db_url  = os.environ.get('DATABASE_URL')
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
             return jsonify({'success': False, 'error': 'ANTHROPIC_API_KEY no configurada'}), 500
@@ -1956,7 +2171,7 @@ def generar_reporte():
         if db_url and empresa_id:
             try:
                 conn = psycopg2.connect(db_url)
-                cur = conn.cursor()
+                cur  = conn.cursor()
                 cur.execute('SELECT descripcion FROM empresas WHERE id = %s LIMIT 1', (empresa_id,))
                 fila = cur.fetchone()
                 if fila:
@@ -1966,12 +2181,12 @@ def generar_reporte():
             except Exception as e:
                 print(f'Error leyendo empresa: {e}')
 
-        # 2. Análisis del pliego
+        # 2. Análisis del pliego desde Neon
         analisis_pliego = None
         if db_url and empresa_id:
             try:
                 conn = psycopg2.connect(db_url)
-                cur = conn.cursor()
+                cur  = conn.cursor()
                 cur.execute(
                     'SELECT analisis_json FROM analisis_pliegos WHERE empresa_id = %s AND referencia = %s LIMIT 1',
                     (empresa_id, referencia)
@@ -1984,6 +2199,36 @@ def generar_reporte():
             except Exception as e:
                 print(f'Error leyendo analisis_pliegos: {e}')
 
+        # Si no hay análisis, intentar generarlo desde caché del PDF
+        if not analisis_pliego:
+            print("Análisis del pliego no encontrado — buscando PDF en caché...")
+            pdf_cache = verificar_archivo_en_cache(referencia)
+            if pdf_cache:
+                print("PDF encontrado en caché — ejecutando análisis...")
+                titulo_lic = licitacion.get('descripcion', '')
+                analisis_pliego = analizar_pliego_desde_cache(
+                    pdf_cache, referencia, titulo_lic, empresa_desc, api_key
+                )
+                if analisis_pliego and db_url and empresa_id:
+                    try:
+                        conn = psycopg2.connect(db_url)
+                        cur  = conn.cursor()
+                        cur.execute("""
+                            INSERT INTO analisis_pliegos
+                                (empresa_id, referencia, analisis_json)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT (empresa_id, referencia)
+                            DO UPDATE SET analisis_json = EXCLUDED.analisis_json
+                        """, (empresa_id, referencia, json.dumps(analisis_pliego)))
+                        conn.commit()
+                        cur.close()
+                        conn.close()
+                        print("Análisis guardado en Neon")
+                    except Exception as e:
+                        print(f'Error guardando análisis: {e}')
+            else:
+                print("PDF no está en caché — análisis no disponible. Analiza el pliego desde Compita primero.")
+
         # 3. Estado del Perfil Licitador
         perfil = obtener_estado_perfil_licitador(empresa_id, db_url)
 
@@ -1995,7 +2240,7 @@ def generar_reporte():
         mapeo = None
         requisitos = (analisis_pliego or {}).get('requisitos', [])
         if empresa_desc and requisitos:
-            print("Mapeando catálogo vs. pliego con Claude...")
+            print("Mapeando catálogo vs. pliego...")
             mapeo = mapear_catalogo_con_claude(empresa_desc, requisitos, api_key)
 
         # 6. Prompt para KanbanBonsai
@@ -2006,13 +2251,13 @@ def generar_reporte():
 
         # 7. Generar y guardar HTML
         datos = {
-            'licitacion': licitacion,
-            'dictamen': dictamen,
-            'analisis_pliego': analisis_pliego,
-            'perfil_licitador': perfil,
-            'mapeo_catalogo': mapeo,
+            'licitacion':        licitacion,
+            'dictamen':          dictamen,
+            'analisis_pliego':   analisis_pliego,
+            'perfil_licitador':  perfil,
+            'mapeo_catalogo':    mapeo,
             'precios_historicos': precios,
-            'kanban_prompt': kanban_prompt
+            'kanban_prompt':     kanban_prompt
         }
         html = generar_html_reporte(referencia, datos)
 
