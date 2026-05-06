@@ -1521,6 +1521,90 @@ SPRINT 5 — Entrega y Seguimiento
 # ══════════════════════════════════════════════════════════════════════════════
 
 REPORTES_DIR = "/tmp/reportes"
+F033_DIR     = "/tmp/f033"
+
+
+def verificar_f033_en_cache(referencia):
+    try:
+        os.makedirs(F033_DIR, exist_ok=True)
+        nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+        ruta = os.path.join(F033_DIR, f"F033_{nombre_seguro}.docx")
+        if os.path.exists(ruta):
+            edad_dias = (time.time() - os.path.getmtime(ruta)) / 86400
+            if edad_dias <= CACHE_DIAS:
+                return ruta
+        return None
+    except Exception as e:
+        print(f"Error verificando caché F033: {e}")
+        return None
+
+
+def generar_f033_y_cachear(referencia):
+    """
+    Genera F033 desde el ZIP cacheado y lo guarda en /tmp/f033/.
+    Retorna (ruta_docx, None) o (None, mensaje_error).
+    """
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+    zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
+
+    if not os.path.exists(zip_path):
+        return None, "ZIP no disponible — no se puede generar F033"
+
+    try:
+        f033_bytes = None
+        fichas_prioritarias, fichas_pliego, fichas_secundarias = [], [], []
+
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            archivos = zf.namelist()
+            if not any('1_Publicaciones/Adjuntos/' in a for a in archivos):
+                return None, "ZIP sin carpeta de adjuntos esperada"
+
+            for archivo in archivos:
+                if '1_Publicaciones/Adjuntos/' not in archivo:
+                    continue
+                nombre = os.path.basename(archivo).lower()
+                if archivo.lower().endswith(('.docx', '.doc')) and '033' in nombre:
+                    f033_bytes = zf.read(archivo)
+                if archivo.lower().endswith('.pdf'):
+                    if any(k in nombre for k in ['ficha', 'tecnica']):
+                        fichas_prioritarias.append(zf.read(archivo))
+                    elif any(k in nombre for k in ['pliego', 'condiciones', 'terminos']):
+                        fichas_pliego.append(zf.read(archivo))
+                    elif any(k in nombre for k in ['listado', 'especificacion']):
+                        fichas_secundarias.append(zf.read(archivo))
+
+        if not f033_bytes:
+            return None, "F033 (.docx) no encontrado en el ZIP"
+
+        candidatos = []
+        if fichas_pliego:       candidatos.append(fichas_pliego)
+        if fichas_prioritarias: candidatos.append(fichas_prioritarias)
+        if fichas_secundarias:  candidatos.append(fichas_secundarias)
+        if not candidatos:
+            return None, "No hay PDFs con ítems en el ZIP"
+
+        items = []
+        for fichas in candidatos:
+            items = extraer_items_con_claude(fichas, referencia)
+            if len(items) >= 5:
+                break
+
+        if not items:
+            return None, "No se extrajeron ítems del ZIP"
+
+        docx_bytes = llenar_f033(f033_bytes, items)
+
+        os.makedirs(F033_DIR, exist_ok=True)
+        ruta = os.path.join(F033_DIR, f"F033_{nombre_seguro}.docx")
+        with open(ruta, 'wb') as f:
+            f.write(docx_bytes)
+
+        print(f"F033 generado y cacheado: {ruta}")
+        return ruta, None
+
+    except Exception as e:
+        print(f"Error generando F033: {e}")
+        return None, str(e)
 
 
 def mapear_catalogo_con_claude(empresa_desc, requisitos, api_key):
@@ -1797,6 +1881,7 @@ def generar_html_reporte(referencia, datos):
     mapeo         = datos.get('mapeo_catalogo')
     precios       = datos.get('precios_historicos', [])
     kanban_prompt = datos.get('kanban_prompt', '')
+    f033_url      = datos.get('f033_url')
     fecha_generado = datetime.now().strftime('%d %b %Y · %H:%M')
 
     veredicto = dictamen.get('veredicto', 'GO')
@@ -1886,10 +1971,10 @@ def generar_html_reporte(referencia, datos):
     if analisis and analisis.get('certificaciones_iso'):
         certs = analisis['certificaciones_iso']
         if certs.get('exige_iso') == 'SI':
-            lista_c = ', '.join(certs.get('listado', [])) or 'ver análisis'
-            t2.append(t_claude(f'Certificaciones exigidas identificadas: {lista_c}'))
+            lista_c = ', '.join(certs.get('listado', [])) or 'ver detalle'
+            t2.append(t_claude(f'Certificaciones exigidas: {lista_c}', 'certs', 'ver análisis'))
         else:
-            t2.append(t_claude('Certificaciones exigidas identificadas: ninguna ISO requerida'))
+            t2.append(t_claude('Certificaciones exigidas: ninguna ISO requerida', 'certs', 'ver análisis'))
         total_claude += 1
     else:
         t2.append(t_human('Verificar certificaciones exigidas en el pliego'))
@@ -1925,8 +2010,12 @@ def generar_html_reporte(referencia, datos):
 
     # ── Sprint 4: Oferta Económica ────────────────────────────────────────────
     t4 = []
-    t4.append(t_human('Generar F033 pre-llenado desde Compita (Agente 033)'))
-    total_human += 1
+    if f033_url:
+        t4.append(t_claude_dl('F033 pre-llenado generado por Agente 033', f033_url))
+        total_claude += 1
+    else:
+        t4.append(t_human('Generar F033 pre-llenado — usar botón Agente 033 en Compita'))
+        total_human += 1
 
     if precios:
         prom_global = sum(p.get('precio_promedio') or 0 for p in precios[:3]) / min(len(precios), 3)
@@ -2033,6 +2122,39 @@ def generar_html_reporte(referencia, datos):
         items_li = ''.join(f'<li>☐ {r}</li>' for r in analisis['requisitos'][:10])
         det += f'<div class="sec" id="checklist"><div class="sec-hdr"><span class="sec-ttl">Checklist de requisitos del pliego</span><span class="bdg-ok">Claude</span></div><ul class="checklist">{items_li}</ul></div>'
 
+    # Sección certificaciones (evidencia)
+    if analisis and analisis.get('certificaciones_iso'):
+        certs = analisis['certificaciones_iso']
+        exige = certs.get('exige_iso', 'NO')
+        listado_c = certs.get('listado', [])
+        nota_c = certs.get('nota', '')
+        if exige == 'SI':
+            cuerpo_c = '<ul class="checklist">' + ''.join(f'<li>{c}</li>' for c in listado_c) + '</ul>'
+        else:
+            cuerpo_c = f'<p class="sec-txt">El pliego <strong>no exige</strong> certificaciones ISO ni normas equivalentes para este proceso.</p>'
+        if nota_c:
+            cuerpo_c += f'<p class="sec-txt muted" style="padding-top:0;">{nota_c}</p>'
+        det += f'<div class="sec" id="certs"><div class="sec-hdr"><span class="sec-ttl">Certificaciones exigidas — evidencia del pliego</span><span class="bdg-ok">Claude</span></div>{cuerpo_c}</div>'
+
+    # Sección tiempos (evidencia fecha límite)
+    if analisis and analisis.get('tiempos'):
+        tiempos = analisis['tiempos']
+        filas_t = ''
+        if tiempos.get('fecha_limite_oferta'):
+            filas_t += f'<tr><td>Fecha límite de oferta</td><td><strong>{tiempos["fecha_limite_oferta"]}</strong></td></tr>'
+        if tiempos.get('dias_calendario_restantes'):
+            filas_t += f'<tr><td>Días restantes</td><td>{tiempos["dias_calendario_restantes"]}</td></tr>'
+        alerta = tiempos.get('alerta', '')
+        color_alerta = {'HOLGADO': '#3B6D11', 'AJUSTADO': '#92400E', 'MUY AJUSTADO': '#DC2626'}.get(alerta, '#6B7280')
+        if alerta:
+            filas_t += f'<tr><td>Estado del plazo</td><td style="color:{color_alerta};font-weight:600;">{alerta}</td></tr>'
+        for fc in (tiempos.get('fechas_clave') or [])[:4]:
+            filas_t += f'<tr><td>Fecha clave</td><td>{fc}</td></tr>'
+        if tiempos.get('advertencia'):
+            filas_t += f'<tr><td colspan="2" style="color:#92400E;font-style:italic;">{tiempos["advertencia"]}</td></tr>'
+        if filas_t:
+            det += f'<div class="sec" id="tiempos"><div class="sec-hdr"><span class="sec-ttl">Fechas y plazos — evidencia del pliego</span><span class="bdg-ok">Claude</span></div><table class="tbl"><tbody>{filas_t}</tbody></table></div>'
+
     kanban_json = json.dumps(kanban_prompt)
 
     return f'''<!DOCTYPE html>
@@ -2068,7 +2190,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 .dot.green{{background:#3B6D11}}
 .dot.amber{{background:#BA7517}}
 .task-txt{{font-size:13px;color:#374151;line-height:1.5}}
-.task-txt a{{color:#3B6D11;font-size:11px;text-decoration:none;margin-left:2px}}
+.task-txt a{{text-decoration:none;margin-left:6px;vertical-align:middle;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;}}
+.btn-ev{{background:#EAF3DE;color:#3B6D11;}}
+.btn-dl{{background:#3B6D11;color:#fff;}}
 .sec-txt{{padding:11px 14px;font-size:13px;color:#374151;line-height:1.6}}
 .muted{{color:#9CA3AF!important;font-style:italic}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:11px 14px}}
@@ -2151,7 +2275,7 @@ function abrirKanban(){{if(kp){{try{{navigator.clipboard.writeText(kp)}}catch(e)
 @app.route('/generar-reporte', methods=['POST'])
 def generar_reporte():
     try:
-        data = request.get_json()
+        data       = request.get_json()
         empresa_id = data.get('empresa_id')
         referencia = data.get('referencia')
         licitacion = data.get('licitacion', {})
@@ -2164,7 +2288,7 @@ def generar_reporte():
         os.makedirs(REPORTES_DIR, exist_ok=True)
         ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
 
-        # Verificar caché del reporte
+        # Verificar caché del reporte completo
         if os.path.exists(ruta_reporte):
             edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
             if edad_dias <= CACHE_DIAS:
@@ -2178,9 +2302,27 @@ def generar_reporte():
         if not api_key:
             return jsonify({'success': False, 'error': 'ANTHROPIC_API_KEY no configurada'}), 500
 
-        print(f"Generando Reporte Compita para {referencia}...")
+        print(f"\n══ PIPELINE REPORTE COMPITA: {referencia} ══")
 
-        # 1. Descripción de la empresa
+        # ── PASO 1: ZIP + PDF ─────────────────────────────────────────────────
+        zip_path  = f"{TEMP_DIR}/{nombre_seguro}.zip"
+        zip_ok    = os.path.exists(zip_path) and (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
+        pdf_cache = verificar_archivo_en_cache(referencia)
+
+        if not zip_ok and not pdf_cache:
+            print("PASO 1: Descargando pliego y ZIP (primera vez)...")
+            try:
+                os.makedirs(TEMP_DIR, exist_ok=True)
+                descargar_pliego(referencia, guardar_zip=True)
+                zip_ok    = os.path.exists(zip_path)
+                pdf_cache = verificar_archivo_en_cache(referencia)
+                print(f"  ZIP: {'OK' if zip_ok else 'no disponible'} | PDF: {'OK' if pdf_cache else 'no disponible'}")
+            except Exception as e:
+                print(f"  Error descargando: {e} — continuando sin ZIP/PDF")
+        else:
+            print(f"PASO 1: ZIP en caché: {zip_ok} | PDF en caché: {pdf_cache is not None}")
+
+        # ── PASO 2: Descripción de la empresa ────────────────────────────────
         empresa_desc = ''
         if db_url and empresa_id:
             try:
@@ -2195,7 +2337,7 @@ def generar_reporte():
             except Exception as e:
                 print(f'Error leyendo empresa: {e}')
 
-        # 2. Análisis del pliego desde Neon
+        # ── PASO 3: Análisis del pliego ───────────────────────────────────────
         analisis_pliego = None
         if db_url and empresa_id:
             try:
@@ -2213,57 +2355,73 @@ def generar_reporte():
             except Exception as e:
                 print(f'Error leyendo analisis_pliegos: {e}')
 
-        # Si no hay análisis, intentar generarlo desde caché del PDF
-        if not analisis_pliego:
-            print("Análisis del pliego no encontrado — buscando PDF en caché...")
-            pdf_cache = verificar_archivo_en_cache(referencia)
-            if pdf_cache:
-                print("PDF encontrado en caché — ejecutando análisis...")
-                titulo_lic = licitacion.get('descripcion', '')
-                analisis_pliego = analizar_pliego_desde_cache(
-                    pdf_cache, referencia, titulo_lic, empresa_desc, api_key
-                )
-                if analisis_pliego and db_url and empresa_id:
-                    try:
-                        conn = psycopg2.connect(db_url)
-                        cur  = conn.cursor()
-                        cur.execute("""
-                            INSERT INTO analisis_pliegos
-                                (empresa_id, referencia, analisis_json)
-                            VALUES (%s, %s, %s)
-                            ON CONFLICT (empresa_id, referencia)
-                            DO UPDATE SET analisis_json = EXCLUDED.analisis_json
-                        """, (empresa_id, referencia, json.dumps(analisis_pliego)))
-                        conn.commit()
-                        cur.close()
-                        conn.close()
-                        print("Análisis guardado en Neon")
-                    except Exception as e:
-                        print(f'Error guardando análisis: {e}')
-            else:
-                print("PDF no está en caché — análisis no disponible. Analiza el pliego desde Compita primero.")
+        if not analisis_pliego and pdf_cache:
+            print("PASO 3: Análisis del pliego no encontrado — ejecutando desde PDF...")
+            titulo_lic = licitacion.get('descripcion', '')
+            analisis_pliego = analizar_pliego_desde_cache(pdf_cache, referencia, titulo_lic, empresa_desc, api_key)
+            if analisis_pliego and db_url and empresa_id:
+                try:
+                    conn = psycopg2.connect(db_url)
+                    cur  = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO analisis_pliegos (empresa_id, referencia, analisis_json)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (empresa_id, referencia)
+                        DO UPDATE SET analisis_json = EXCLUDED.analisis_json
+                    """, (empresa_id, referencia, json.dumps(analisis_pliego)))
+                    conn.commit()
+                    cur.close()
+                    conn.close()
+                    print("  Análisis guardado en Neon")
+                except Exception as e:
+                    print(f'  Error guardando análisis: {e}')
+        elif not analisis_pliego:
+            print("PASO 3: Sin PDF en caché — análisis no disponible")
+        else:
+            print("PASO 3: Análisis del pliego en Neon ✓")
 
-        # 3. Estado del Perfil Licitador
+        # ── PASO 4: F033 ──────────────────────────────────────────────────────
+        f033_ruta = verificar_f033_en_cache(referencia)
+        if not f033_ruta and zip_ok:
+            print("PASO 4: Generando F033 desde ZIP...")
+            f033_ruta, f033_error = generar_f033_y_cachear(referencia)
+            if f033_ruta:
+                print(f"  F033 generado ✓")
+            else:
+                print(f"  F033 no generado: {f033_error}")
+        elif f033_ruta:
+            print("PASO 4: F033 en caché ✓")
+        else:
+            print("PASO 4: F033 no disponible (sin ZIP)")
+
+        dominio  = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
+        f033_url = f"https://{dominio}/f033/{nombre_seguro}" if f033_ruta else None
+
+        # ── PASO 5: Perfil Licitador ──────────────────────────────────────────
+        print("PASO 5: Consultando Perfil Licitador...")
         perfil = obtener_estado_perfil_licitador(empresa_id, db_url)
 
-        # 4. Precios históricos
+        # ── PASO 6: Precios históricos ────────────────────────────────────────
+        print("PASO 6: Buscando precios históricos...")
         titulo_lic = licitacion.get('descripcion', '')
         precios = buscar_precios_referencia(titulo_lic, titulo_lic)
+        print(f"  {len(precios)} precios encontrados")
 
-        # 5. Mapeo catálogo (solo si hay datos reales)
-        mapeo = None
+        # ── PASO 7: Mapeo catálogo ────────────────────────────────────────────
+        mapeo     = None
         requisitos = (analisis_pliego or {}).get('requisitos', [])
         if empresa_desc and requisitos:
-            print("Mapeando catálogo vs. pliego...")
+            print("PASO 7: Mapeando catálogo vs. pliego...")
             mapeo = mapear_catalogo_con_claude(empresa_desc, requisitos, api_key)
 
-        # 6. Prompt para KanbanBonsai
-        print("Generando prompt KanbanBonsai...")
+        # ── PASO 8: Prompt KanbanBonsai ───────────────────────────────────────
+        print("PASO 8: Generando prompt KanbanBonsai...")
         kanban_prompt = generar_prompt_kanban(
             referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key
         )
 
-        # 7. Generar y guardar HTML
+        # ── PASO 9: Generar y guardar HTML ────────────────────────────────────
+        print("PASO 9: Generando HTML del Reporte...")
         datos = {
             'licitacion':        licitacion,
             'dictamen':          dictamen,
@@ -2271,21 +2429,35 @@ def generar_reporte():
             'perfil_licitador':  perfil,
             'mapeo_catalogo':    mapeo,
             'precios_historicos': precios,
-            'kanban_prompt':     kanban_prompt
+            'kanban_prompt':     kanban_prompt,
+            'f033_url':          f033_url,
         }
         html = generar_html_reporte(referencia, datos)
 
         with open(ruta_reporte, 'w', encoding='utf-8') as f:
             f.write(html)
 
-        dominio = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
         url = f"https://{dominio}/reporte/{nombre_seguro}"
-        print(f"Reporte generado: {url}")
+        print(f"══ Reporte listo: {url} ══\n")
         return jsonify({'success': True, 'url': url, 'cached': False})
 
     except Exception as e:
         print(f"Error en generar-reporte: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/f033/<nombre_seguro>', methods=['GET'])
+def servir_f033(nombre_seguro):
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', nombre_seguro)
+    ruta = os.path.join(F033_DIR, f"F033_{nombre_seguro}.docx")
+    if not os.path.exists(ruta):
+        return "F033 no encontrado. Genéralo desde el Reporte Compita.", 404
+    return send_file(
+        ruta,
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        as_attachment=True,
+        download_name=f"F033_{nombre_seguro}.docx"
+    )
 
 
 @app.route('/reporte/<nombre_seguro>', methods=['GET'])
@@ -2295,7 +2467,7 @@ def servir_reporte(nombre_seguro):
     if not os.path.exists(ruta):
         return "Reporte no encontrado. Genéralo desde Compita.", 404
     return send_file(ruta, mimetype='text/html')
-
+    
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
