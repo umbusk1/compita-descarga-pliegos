@@ -1874,6 +1874,7 @@ SPRINT 5 — Entrega y Seguimiento
 
 
 def generar_html_reporte(referencia, datos):
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
     licitacion    = datos.get('licitacion', {})
     dictamen      = datos.get('dictamen', {})
     analisis      = datos.get('analisis_pliego')
