@@ -1703,27 +1703,29 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
 
 
 def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key):
-    """Ejecuta análisis de pliego sobre un PDF ya descargado. Soporta PDFs de imagen via base64."""
-    es_pdf_imagen = False
-    texto_completo = ""
+    """Ejecuta analisis de pliego sobre un PDF ya descargado. Soporta PDFs de imagen via base64."""
     try:
-        reader = PdfReader(pdf_path)
-        for pg in reader.pages:
-            try:
-                t = pg.extract_text()
-                if t:
-                    texto_completo += t + "\n\n"
-            except Exception:
-                continue
+        # ── Intentar extraccion de texto ─────────────────────────────────────
+        es_pdf_imagen = False
+        texto_completo = ""
+        try:
+            reader = PdfReader(pdf_path)
+            for pg in reader.pages:
+                try:
+                    t = pg.extract_text()
+                    if t:
+                        texto_completo += t + "\n\n"
+                except Exception:
+                    continue
+        except Exception as e:
+            print(f"Error leyendo PDF: {e}")
+
         if len(texto_completo.strip()) < 200:
-            print(f"analizar_pliego_desde_cache: PDF imagen detectado — usando envio nativo a Claude")
+            print("analizar_pliego_desde_cache: PDF imagen detectado — usando envio nativo a Claude")
             es_pdf_imagen = True
             texto_completo = "[El pliego es un PDF de imagen — se adjunta como documento para analisis directo por Claude]"
         elif len(texto_completo) > 100000:
             texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
-    except Exception as e:
-        print(f'Error leyendo PDF en analizar_pliego_desde_cache: {e}')
-        return None
 
         fecha_hoy = datetime.now().strftime('%d/%m/%Y')
         perfil_txt = f"\nDescripcion: {empresa_desc}" if empresa_desc else ""
@@ -2336,6 +2338,27 @@ def generar_reporte():
         ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
 
         force = data.get('force', False)
+
+        # Si no hay analisis en Neon, forzar regeneracion aunque haya cache
+        analisis_en_neon = False
+        if db_url and empresa_id:
+            try:
+                conn = psycopg2.connect(db_url)
+                cur  = conn.cursor()
+                cur.execute(
+                    'SELECT 1 FROM analisis_pliegos WHERE empresa_id = %s AND referencia = %s LIMIT 1',
+                    (empresa_id, referencia)
+                )
+                analisis_en_neon = cur.fetchone() is not None
+                cur.close()
+                conn.close()
+            except Exception:
+                pass
+
+        if not force and not analisis_en_neon:
+            force = True
+            print("PASO 0: Sin analisis en Neon — forzando regeneracion del reporte")
+
         if not force and os.path.exists(ruta_reporte):
             edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
             if edad_dias <= CACHE_DIAS:
