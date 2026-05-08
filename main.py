@@ -2337,6 +2337,11 @@ def generar_reporte():
         os.makedirs(REPORTES_DIR, exist_ok=True)
         ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
 
+        db_url  = os.environ.get('DATABASE_URL')
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            return jsonify({'success': False, 'error': 'ANTHROPIC_API_KEY no configurada'}), 500
+
         force = data.get('force', False)
 
         # Si no hay analisis en Neon, forzar regeneracion aunque haya cache
@@ -2366,11 +2371,6 @@ def generar_reporte():
                 url = f"https://{dominio}/reporte/{nombre_seguro}"
                 print(f"Reporte en caché: {url}")
                 return jsonify({'success': True, 'url': url, 'cached': True})
-
-        db_url  = os.environ.get('DATABASE_URL')
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
-        if not api_key:
-            return jsonify({'success': False, 'error': 'ANTHROPIC_API_KEY no configurada'}), 500
 
         print(f"\n══ PIPELINE REPORTE COMPITA: {referencia} ══")
 
