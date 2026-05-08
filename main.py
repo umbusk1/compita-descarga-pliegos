@@ -1901,6 +1901,7 @@ def generar_html_reporte(referencia, datos):
     kanban_prompt = datos.get('kanban_prompt', '')
     f033_url      = datos.get('f033_url')
     pliego_url    = datos.get('pliego_url')
+    formularios_adicionales = datos.get('formularios_adicionales', [])
     fecha_generado = datetime.now().strftime('%d %b %Y · %H:%M')
 
     veredicto = dictamen.get('veredicto', 'GO')
@@ -2009,6 +2010,9 @@ def generar_html_reporte(referencia, datos):
     t2.append(t_human(f'Tramitar garantía: {garantias_txt[:70]}' if garantias_txt else 'Tramitar garantía de seriedad'))
     t2.append(t_human('Compilar y verificar expediente legal completo'))
     total_human += 2
+    for form in [f for f in formularios_adicionales if f.get('sprint') == 2]:
+        t2.append(t_human(f"Completar {form['nombre']}"))
+        total_human += 1
     s2 = sprint_sec('2', 'Documentación Legal', t2)
 
     t3 = []
@@ -2023,11 +2027,14 @@ def generar_html_reporte(referencia, datos):
     t3.append(t_human('Reunir fichas técnicas de fabricantes para ítems requeridos'))
     t3.append(t_human('Preparar y aprobar propuesta técnica'))
     total_human += 3
+    for form in [f for f in formularios_adicionales if f.get('sprint') == 3]:
+        t3.append(t_human(f"Completar {form['nombre']}"))
+        total_human += 1
     s3 = sprint_sec('3', 'Oferta Técnica', t3)
 
     t4 = []
     if f033_url:
-        t4.append(t_claude('F033 pre-llenado generado por Agente 033', 'f033', 'descargar'))
+        t4.append(f'<div class="task"><span class="dot green"></span><span class="task-txt">F033 pre-llenado generado por Agente 033 — <a href="{f033_url}" target="_blank" style="background:#3B6D11;color:#fff;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">⬇ Descargar</a></span></div>')
         total_claude += 1
     else:
         btn_f033 = f'<button onclick="generarF033Reporte(this)" style="display:inline-block;padding:2px 9px;background:#BA7517;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px;vertical-align:middle;">Generar F033 →</button>'
@@ -2391,6 +2398,35 @@ def generar_reporte():
         else:
             print(f"PASO 1: ZIP en caché: {zip_ok} | PDF en caché: {pdf_cache is not None}")
 
+        # ── PASO 1.5: Detectar formularios adicionales en el ZIP ─────────────
+        formularios_adicionales = []
+        if zip_ok:
+            try:
+                FORMAS_CONOCIDAS = [
+                    ({'034', 'presentofer', 'presentacion_de_oferta'}, 'F034', 'Formulario F034 — Presentación de Oferta', 2),
+                    ({'042', 'informacion_oferente', 'informacion del oferente'}, 'F042', 'Formulario F042 — Información del Oferente', 2),
+                    ({'etico', 'integridad', 'diligencia', 'compromiso'}, 'ETICO', 'Compromiso ético de proveedores', 2),
+                    ({'056', 'muestra', 'entrega_de_muestra'}, 'F056', 'Formulario F056 — Entrega de Muestras', 3),
+                ]
+                vistos = set()
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    for archivo in zf.namelist():
+                        if '1_Publicaciones/Adjuntos/' not in archivo:
+                            continue
+                        if not archivo.lower().endswith(('.docx', '.doc')):
+                            continue
+                        nombre = os.path.basename(archivo).lower().replace(' ', '_')
+                        if '033' in nombre:
+                            continue
+                        for claves, codigo, etiqueta, sprint in FORMAS_CONOCIDAS:
+                            if codigo not in vistos and any(c in nombre for c in claves):
+                                formularios_adicionales.append({'codigo': codigo, 'nombre': etiqueta, 'sprint': sprint})
+                                vistos.add(codigo)
+                                break
+                print(f"  Formularios adicionales: {[f['codigo'] for f in formularios_adicionales] or 'ninguno'}")
+            except Exception as e:
+                print(f"  Error inspeccionando formularios: {e}")
+
         empresa_desc = ''
         if db_url and empresa_id:
             try:
@@ -2496,6 +2532,7 @@ def generar_reporte():
             'kanban_prompt':     kanban_prompt,
             'f033_url':          f033_url,
             'pliego_url':        pliego_url,
+            'formularios_adicionales': formularios_adicionales,
         }
         html = generar_html_reporte(referencia, datos)
 
