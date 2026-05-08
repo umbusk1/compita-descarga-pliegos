@@ -400,11 +400,6 @@ def endpoint_descargar_pliego():
 
 # ── NUEVO: buscar precios históricos en precios_referencia ─────────────────
 def buscar_precios_referencia(titulo, descripcion):
-    """
-    Busca ítems similares en precios_referencia usando el título
-    y descripción de la licitación que se está analizando.
-    Devuelve lista de dicts con precios de referencia, o [] si no hay datos.
-    """
     db_url = os.environ.get('DATABASE_URL')
     if not db_url:
         return []
@@ -485,10 +480,12 @@ def analizar_pliego():
                 'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). Limite: 50 MB.'
             }), 400
 
+        # ── CAMBIO 1: Detección de PDF imagen ────────────────────────────────
         print(f"Extrayendo texto del PDF...")
+        es_pdf_imagen = False
+        texto_completo = ""
         try:
             reader = PdfReader(archivo_pdf)
-            texto_completo = ""
 
             for i, page in enumerate(reader.pages):
                 try:
@@ -499,23 +496,22 @@ def analizar_pliego():
                     print(f"Error extrayendo pagina {i+1}: {str(e)}")
                     continue
 
-            if not texto_completo.strip():
-                return jsonify({
-                    'success': False,
-                    'error': 'No se pudo extraer texto del PDF.'
-                }), 400
-
-            if len(texto_completo) > 100000:
-                print(f"Texto muy largo ({len(texto_completo)} caracteres), truncando...")
-                texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
-
-            print(f"Texto extraido: {len(texto_completo)} caracteres, {len(reader.pages)} paginas")
+            if len(texto_completo.strip()) < 200:
+                print(f"Texto insuficiente ({len(texto_completo)} chars) — PDF es imagen, usando envio nativo a Claude")
+                es_pdf_imagen = True
+                texto_completo = "[El pliego es un PDF de imagen — se adjunta como documento para analisis directo por Claude]"
+            else:
+                if len(texto_completo) > 100000:
+                    print(f"Texto muy largo ({len(texto_completo)} caracteres), truncando...")
+                    texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
+                print(f"Texto extraido: {len(texto_completo)} caracteres, {len(reader.pages)} paginas")
 
         except Exception as e:
             return jsonify({
                 'success': False,
                 'error': f'Error al procesar el PDF: {str(e)}'
             }), 400
+        # ─────────────────────────────────────────────────────────────────────
 
         # ── NUEVO: buscar precios históricos ──────────────────────────────────
         print(f"Buscando precios historicos de referencia...")
@@ -624,13 +620,41 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             "anthropic-version": "2023-06-01"
         }
 
-        payload = {
-            "model": "claude-sonnet-4-20250514",
-            "max_tokens": 3000,
-            "messages": [{"role": "user", "content": prompt_analisis}]
-        }
+        # ── CAMBIO 2: Payload según tipo de PDF ──────────────────────────────
+        if es_pdf_imagen:
+            print("Enviando PDF imagen directamente a Claude AI (modo documento nativo)...")
+            with open(archivo_pdf, 'rb') as f:
+                pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+            payload = {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 3000,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf_b64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt_analisis
+                        }
+                    ]
+                }]
+            }
+        else:
+            print("Enviando texto del pliego a Claude AI...")
+            payload = {
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 3000,
+                "messages": [{"role": "user", "content": prompt_analisis}]
+            }
+        # ─────────────────────────────────────────────────────────────────────
 
-        print("Enviando texto del pliego a Claude AI...")
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
@@ -653,7 +677,6 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
 
         analisis = json.loads(analisis_texto)
 
-        # Garantizar que precios_historicos siempre esté en la respuesta
         if 'precios_historicos' not in analisis:
             analisis['precios_historicos'] = precios_ref
 
@@ -663,7 +686,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             'success': True,
             'pliego_analizado': True,
             'analisis': analisis,
-            'tiene_precios_historicos': len(precios_ref) > 0   # ← NUEVO: flag para el frontend
+            'tiene_precios_historicos': len(precios_ref) > 0
         })
 
     except json.JSONDecodeError as e:
@@ -1147,7 +1170,6 @@ def agente_033():
 # BACKFILL ETAPA 1 — Descargar ZIPs y guardar PDFs en ofertas_pendientes
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Estado global para consultar progreso
 _descarga_estado = {
     "corriendo": False,
     "total": 0,
@@ -1183,13 +1205,6 @@ def _es_oferta_economica(nombre_pdf):
 
 
 def _worker_descarga(lote_size, db_url):
-    """
-    Corre en background thread.
-    Para cada licitación adjudicada pendiente:
-      1. Descarga el ZIP con Playwright (reutiliza descargar_pliego)
-      2. Extrae PDFs de 3_Ofertas/ que sean ofertas económicas
-      3. Guarda los bytes del PDF en la tabla ofertas_pendientes
-    """
     global _descarga_estado
     _descarga_estado["corriendo"] = True
     _descarga_estado["pdfs_guardados"] = 0
@@ -1198,7 +1213,6 @@ def _worker_descarga(lote_size, db_url):
     _descarga_estado["iniciado_en"] = datetime.now().strftime('%H:%M:%S')
 
     try:
-        # Obtener licitaciones que aún no tienen PDFs en ofertas_pendientes
         conn = psycopg2.connect(db_url)
         cur = conn.cursor()
         cur.execute("""
@@ -1240,7 +1254,6 @@ def _worker_descarga(lote_size, db_url):
                 zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
                 os.makedirs(TEMP_DIR, exist_ok=True)
 
-                # Reusar ZIP en caché si existe y es reciente
                 zip_en_cache = (
                     os.path.exists(zip_path) and
                     (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
@@ -1254,7 +1267,6 @@ def _worker_descarga(lote_size, db_url):
                     _descarga_estado["procesadas"] += 1
                     continue
 
-                # Extraer PDFs de ofertas del ZIP y guardar en Neon
                 pdfs_guardados_esta = 0
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     pdfs_oferta = [
@@ -1315,11 +1327,6 @@ def _worker_descarga(lote_size, db_url):
 
 @app.route('/iniciar-descarga-backfill', methods=['POST'])
 def iniciar_descarga_backfill():
-    """
-    Dispara la descarga de ZIPs en background.
-    Header requerido: X-Backfill-Token: <BACKFILL_SECRET>
-    Body JSON opcional: { "lote_size": 50 }
-    """
     token   = request.headers.get('X-Backfill-Token', '')
     secreto = os.environ.get('BACKFILL_SECRET', '')
     if not secreto or token != secreto:
@@ -1353,7 +1360,6 @@ def iniciar_descarga_backfill():
 
 @app.route('/descarga-backfill-status', methods=['GET'])
 def descarga_backfill_status():
-    """Consulta el progreso de la descarga en curso."""
     token   = request.headers.get('X-Backfill-Token', '')
     secreto = os.environ.get('BACKFILL_SECRET', '')
     if not secreto or token != secreto:
@@ -1372,7 +1378,6 @@ def organizador_oferta():
         if not referencia or not licitacion or not dictamen:
             return jsonify({'success': False, 'error': 'referencia, licitacion y dictamen son requeridos'}), 400
 
-        # Leer descripción de la empresa desde Neon
         empresa_desc = ''
         db_url = os.environ.get('DATABASE_URL')
         if db_url and empresa_id:
@@ -1388,7 +1393,6 @@ def organizador_oferta():
             except Exception as e:
                 print(f'Error leyendo empresa: {e}')
 
-        # Leer análisis del pliego si existe
         analisis_pliego = None
         if db_url and empresa_id:
             try:
@@ -1406,7 +1410,6 @@ def organizador_oferta():
             except Exception as e:
                 print(f'Error leyendo analisis_pliegos: {e}')
 
-        # Construir sección del pliego
         if analisis_pliego:
             requisitos = analisis_pliego.get('requisitos', [])[:5]
             req_texto  = '\n'.join(f'- {r}' for r in requisitos) if requisitos else '- No disponible'
@@ -1419,7 +1422,6 @@ Experiencia previa: {experiencia}"""
         else:
             seccion_pliego = 'ANÁLISIS DEL PLIEGO: No disponible — usar descripción de la licitación como referencia.'
 
-        # Construir sección del dictamen
         condiciones = dictamen.get('condiciones', [])
         condiciones_texto = '\n'.join(
             f"- {'[URGENTE] ' if c.get('urgente') else ''}{c.get('texto', '')}"
@@ -1540,10 +1542,6 @@ def verificar_f033_en_cache(referencia):
 
 
 def generar_f033_y_cachear(referencia):
-    """
-    Genera F033 desde el ZIP cacheado y lo guarda en /tmp/f033/.
-    Retorna (ruta_docx, None) o (None, mensaje_error).
-    """
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
     zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
 
@@ -1898,7 +1896,6 @@ def generar_html_reporte(referencia, datos):
     fecha_lim = licitacion.get('fecha_presentacion', '')
     fecha_lim_corta = fecha_lim[:10] if fecha_lim else '—'
 
-    # Solo dos estados: verde (Claude hizo) y ámbar (humano por hacer)
     def t_claude(txt, anchor=None, link_label='ver resultado'):
         a = f' — <a href="#{anchor}" style="color:#3B6D11;font-size:11px;">{link_label}</a>' if anchor else ''
         return f'<div class="task"><span class="dot green"></span><span class="task-txt">{txt}{a}</span></div>'
@@ -1923,11 +1920,9 @@ def generar_html_reporte(referencia, datos):
   <div class="tasks">{"".join(tareas)}</div>
 </div>'''
 
-    # ── Contadores para el header ─────────────────────────────────────────────
     total_claude = 0
     total_human  = 0
 
-    # ── Sprint 1: Análisis y Evaluación ──────────────────────────────────────
     t1 = []
     if analisis and analisis.get('sintesis'):
         t1.append(t_claude(f'Análisis del pliego {referencia} completo', 'sintesis'))
@@ -1954,7 +1949,6 @@ def generar_html_reporte(referencia, datos):
     total_human += 2
     s1 = sprint_sec('1', 'Análisis y Evaluación', t1)
 
-    # ── Sprint 2: Documentación Legal ────────────────────────────────────────
     t2 = []
     if perfil:
         nv  = len(perfil.get('vigentes', [])) + len(perfil.get('permanentes', []))
@@ -1994,7 +1988,6 @@ def generar_html_reporte(referencia, datos):
     total_human += 2
     s2 = sprint_sec('2', 'Documentación Legal', t2)
 
-    # ── Sprint 3: Oferta Técnica ──────────────────────────────────────────────
     t3 = []
     if analisis and analisis.get('requisitos'):
         t3.append(t_claude(f'{len(analisis["requisitos"])} especificaciones técnicas extraídas y cruzadas', 'checklist', 'ver tabla'))
@@ -2009,10 +2002,9 @@ def generar_html_reporte(referencia, datos):
     total_human += 3
     s3 = sprint_sec('3', 'Oferta Técnica', t3)
 
-    # ── Sprint 4: Oferta Económica ────────────────────────────────────────────
     t4 = []
     if f033_url:
-        t4.append(t_claude_dl('F033 pre-llenado generado por Agente 033', f033_url))
+        t4.append(t_claude('F033 pre-llenado generado por Agente 033', 'f033', 'descargar'))
         total_claude += 1
     else:
         btn_f033 = f'<button onclick="generarF033Reporte(this)" style="display:inline-block;padding:2px 9px;background:#BA7517;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px;vertical-align:middle;">Generar F033 →</button>'
@@ -2028,7 +2020,6 @@ def generar_html_reporte(referencia, datos):
         total_human += 1
 
     if analisis and analisis.get('viabilidad'):
-        itbis = (analisis or {}).get('viabilidad', {}).get('especificaciones_tecnicas', '')
         t4.append(t_claude('Política de ITBIS del pliego identificada'))
         total_claude += 1
     else:
@@ -2040,7 +2031,6 @@ def generar_html_reporte(referencia, datos):
     total_human += 2
     s4 = sprint_sec('4', 'Oferta Económica', t4)
 
-    # ── Sprint 5: Entrega y Seguimiento ──────────────────────────────────────
     t5 = []
     if analisis and analisis.get('requisitos'):
         t5.append(t_claude(f'Checklist de entrega generado — {len(analisis["requisitos"])} documentos', 'checklist', 'ver checklist'))
@@ -2064,7 +2054,6 @@ def generar_html_reporte(referencia, datos):
     total_human += 3
     s5 = sprint_sec('5', 'Entrega y Seguimiento', t5)
 
-    # ── Secciones de detalle ──────────────────────────────────────────────────
     det = ''
 
     if analisis and analisis.get('sintesis'):
@@ -2124,7 +2113,6 @@ def generar_html_reporte(referencia, datos):
         items_li = ''.join(f'<li>☐ {r}</li>' for r in analisis['requisitos'][:10])
         det += f'<div class="sec" id="checklist"><div class="sec-hdr"><span class="sec-ttl">Checklist de requisitos del pliego</span><span class="bdg-ok">Claude</span></div><ul class="checklist">{items_li}</ul></div>'
 
-    # Sección certificaciones (evidencia)
     if analisis and analisis.get('certificaciones_iso'):
         certs = analisis['certificaciones_iso']
         exige = certs.get('exige_iso', 'NO')
@@ -2138,7 +2126,6 @@ def generar_html_reporte(referencia, datos):
             cuerpo_c += f'<p class="sec-txt muted" style="padding-top:0;">{nota_c}</p>'
         det += f'<div class="sec" id="certs"><div class="sec-hdr"><span class="sec-ttl">Certificaciones exigidas — evidencia del pliego</span><span class="bdg-ok">Claude</span></div>{cuerpo_c}</div>'
 
-    # Sección tiempos (evidencia fecha límite)
     if analisis and analisis.get('tiempos'):
         tiempos = analisis['tiempos']
         filas_t = ''
@@ -2327,7 +2314,6 @@ def generar_reporte():
         os.makedirs(REPORTES_DIR, exist_ok=True)
         ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
 
-        # Verificar caché del reporte completo
         if os.path.exists(ruta_reporte):
             edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
             if edad_dias <= CACHE_DIAS:
@@ -2343,7 +2329,6 @@ def generar_reporte():
 
         print(f"\n══ PIPELINE REPORTE COMPITA: {referencia} ══")
 
-        # ── PASO 1: ZIP + PDF ─────────────────────────────────────────────────
         zip_path  = f"{TEMP_DIR}/{nombre_seguro}.zip"
         zip_ok    = os.path.exists(zip_path) and (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
         pdf_cache = verificar_archivo_en_cache(referencia)
@@ -2361,7 +2346,6 @@ def generar_reporte():
         else:
             print(f"PASO 1: ZIP en caché: {zip_ok} | PDF en caché: {pdf_cache is not None}")
 
-        # ── PASO 2: Descripción de la empresa ────────────────────────────────
         empresa_desc = ''
         if db_url and empresa_id:
             try:
@@ -2376,7 +2360,6 @@ def generar_reporte():
             except Exception as e:
                 print(f'Error leyendo empresa: {e}')
 
-        # ── PASO 3: Análisis del pliego ───────────────────────────────────────
         analisis_pliego = None
         if db_url and empresa_id:
             try:
@@ -2419,7 +2402,6 @@ def generar_reporte():
         else:
             print("PASO 3: Análisis del pliego en Neon ✓")
 
-        # ── PASO 4: F033 ──────────────────────────────────────────────────────
         f033_ruta = verificar_f033_en_cache(referencia)
         if not f033_ruta and zip_ok:
             print("PASO 4: Generando F033 desde ZIP...")
@@ -2436,30 +2418,25 @@ def generar_reporte():
         dominio  = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
         f033_url = f"https://{dominio}/f033/{nombre_seguro}" if f033_ruta else None
 
-        # ── PASO 5: Perfil Licitador ──────────────────────────────────────────
         print("PASO 5: Consultando Perfil Licitador...")
         perfil = obtener_estado_perfil_licitador(empresa_id, db_url)
 
-        # ── PASO 6: Precios históricos ────────────────────────────────────────
         print("PASO 6: Buscando precios históricos...")
         titulo_lic = licitacion.get('descripcion', '')
         precios = buscar_precios_referencia(titulo_lic, titulo_lic)
         print(f"  {len(precios)} precios encontrados")
 
-        # ── PASO 7: Mapeo catálogo ────────────────────────────────────────────
         mapeo     = None
         requisitos = (analisis_pliego or {}).get('requisitos', [])
         if empresa_desc and requisitos:
             print("PASO 7: Mapeando catálogo vs. pliego...")
             mapeo = mapear_catalogo_con_claude(empresa_desc, requisitos, api_key)
 
-        # ── PASO 8: Prompt KanbanBonsai ───────────────────────────────────────
         print("PASO 8: Generando prompt KanbanBonsai...")
         kanban_prompt = generar_prompt_kanban(
             referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key
         )
 
-        # ── PASO 9: Generar y guardar HTML ────────────────────────────────────
         print("PASO 9: Generando HTML del Reporte...")
         datos = {
             'licitacion':        licitacion,
