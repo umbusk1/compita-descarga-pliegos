@@ -1946,7 +1946,10 @@ def generar_html_reporte(referencia, datos):
         t1.append(t_claude(f'Análisis del pliego {referencia} completo', 'sintesis'))
         total_claude += 1
     else:
-        t1.append(t_human('Analizar pliego desde Compita — requerido para continuar'))
+        if pliego_url:
+            t1.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">Pliego no analizado — <a href="{pliego_url}" download style="background:#EAF3DE;color:#3B6D11;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">⬇ Descargar pliego</a></span></div>')
+        else:
+            t1.append(t_human('Analizar pliego desde Compita — requerido para continuar'))
         total_human += 1
 
     if mapeo:
@@ -2332,7 +2335,8 @@ def generar_reporte():
         os.makedirs(REPORTES_DIR, exist_ok=True)
         ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
 
-        if os.path.exists(ruta_reporte):
+        force = data.get('force', False)
+        if not force and os.path.exists(ruta_reporte):
             edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
             if edad_dias <= CACHE_DIAS:
                 dominio = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
@@ -2482,6 +2486,24 @@ def generar_reporte():
     except Exception as e:
         print(f"Error en generar-reporte: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/pliego/<nombre_seguro>', methods=['GET'])
+def servir_pliego(nombre_seguro):
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', nombre_seguro)
+    try:
+        for archivo in os.listdir(TEMP_DIR):
+            if archivo.startswith(nombre_seguro) and archivo.endswith('_documento.pdf'):
+                ruta = os.path.join(TEMP_DIR, archivo)
+                return send_file(
+                    ruta,
+                    mimetype='application/pdf',
+                    as_attachment=True,
+                    download_name=f"pliego_{nombre_seguro}.pdf"
+                )
+    except Exception:
+        pass
+    return "Pliego no encontrado en caché. Descárgalo desde Compita.", 404
 
 
 @app.route('/f033/<nombre_seguro>', methods=['GET'])
