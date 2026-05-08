@@ -1703,10 +1703,11 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
 
 
 def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key):
-    """Ejecuta análisis de pliego sobre un PDF ya descargado."""
+    """Ejecuta análisis de pliego sobre un PDF ya descargado. Soporta PDFs de imagen via base64."""
+    es_pdf_imagen = False
+    texto_completo = ""
     try:
         reader = PdfReader(pdf_path)
-        texto_completo = ""
         for pg in reader.pages:
             try:
                 t = pg.extract_text()
@@ -1714,10 +1715,15 @@ def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_
                     texto_completo += t + "\n\n"
             except Exception:
                 continue
-        if not texto_completo.strip():
-            return None
-        if len(texto_completo) > 100000:
+        if len(texto_completo.strip()) < 200:
+            print(f"analizar_pliego_desde_cache: PDF imagen detectado — usando envio nativo a Claude")
+            es_pdf_imagen = True
+            texto_completo = "[El pliego es un PDF de imagen — se adjunta como documento para analisis directo por Claude]"
+        elif len(texto_completo) > 100000:
             texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
+    except Exception as e:
+        print(f'Error leyendo PDF en analizar_pliego_desde_cache: {e}')
+        return None
 
         fecha_hoy = datetime.now().strftime('%d/%m/%Y')
         perfil_txt = f"\nDescripcion: {empresa_desc}" if empresa_desc else ""
@@ -1763,6 +1769,17 @@ Analiza el pliego y responde SOLO con este JSON:
   "precios_historicos": []
 }}"""
 
+        if es_pdf_imagen:
+            print("analizar_pliego_desde_cache: enviando PDF como documento nativo...")
+            with open(pdf_path, 'rb') as f:
+                pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
+            messages = [{'role': 'user', 'content': [
+                {'type': 'document', 'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': pdf_b64}},
+                {'type': 'text', 'text': prompt}
+            ]}]
+        else:
+            messages = [{'role': 'user', 'content': prompt}]
+
         resp = requests.post(
             'https://api.anthropic.com/v1/messages',
             headers={
@@ -1773,7 +1790,7 @@ Analiza el pliego y responde SOLO con este JSON:
             json={
                 'model': 'claude-sonnet-4-20250514',
                 'max_tokens': 3000,
-                'messages': [{'role': 'user', 'content': prompt}]
+                'messages': messages
             },
             timeout=90
         )
@@ -1881,6 +1898,7 @@ def generar_html_reporte(referencia, datos):
     precios       = datos.get('precios_historicos', [])
     kanban_prompt = datos.get('kanban_prompt', '')
     f033_url      = datos.get('f033_url')
+    pliego_url    = datos.get('pliego_url')
     fecha_generado = datetime.now().strftime('%d %b %Y · %H:%M')
 
     veredicto = dictamen.get('veredicto', 'GO')
@@ -2438,6 +2456,9 @@ def generar_reporte():
         )
 
         print("PASO 9: Generando HTML del Reporte...")
+        dominio  = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
+        pliego_url = f"https://{dominio}/pliego/{nombre_seguro}" if pdf_cache else None
+
         datos = {
             'licitacion':        licitacion,
             'dictamen':          dictamen,
@@ -2447,6 +2468,7 @@ def generar_reporte():
             'precios_historicos': precios,
             'kanban_prompt':     kanban_prompt,
             'f033_url':          f033_url,
+            'pliego_url':        pliego_url,
         }
         html = generar_html_reporte(referencia, datos)
 
