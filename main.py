@@ -2391,6 +2391,24 @@ def generar_reporte():
             force = True
             print("PASO 0: Sin analisis en Neon — forzando regeneracion del reporte")
 
+        # Si force=True, borrar analisis cacheado en Neon para re-ejecutarlo con el codigo actual
+        if force and db_url and empresa_id:
+            try:
+                conn = psycopg2.connect(db_url)
+                cur  = conn.cursor()
+                cur.execute(
+                    'DELETE FROM analisis_pliegos WHERE empresa_id = %s AND referencia = %s',
+                    (empresa_id, referencia)
+                )
+                if cur.rowcount > 0:
+                    print(f"PASO 0: Analisis previo borrado de Neon (force=True)")
+                conn.commit()
+                cur.close()
+                conn.close()
+            except Exception as e:
+                print(f"PASO 0: Error borrando analisis de Neon: {e}")
+            analisis_en_neon = False
+
         if not force and os.path.exists(ruta_reporte):
             edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
             if edad_dias <= CACHE_DIAS:
