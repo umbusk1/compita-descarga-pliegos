@@ -622,6 +622,11 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
 
         # ── CAMBIO 2: Payload según tipo de PDF ──────────────────────────────
         if es_pdf_imagen:
+            if tamano_mb > 20:
+                return jsonify({
+                    'success': False,
+                    'error': f'El pliego ({tamano_mb:.1f} MB) no tiene texto extraíble y supera el límite para análisis de imagen (~20 MB). Descárgalo manualmente desde el portal SECP para revisarlo.'
+                }), 400
             print("Enviando PDF imagen directamente a Claude AI (modo documento nativo)...")
             with open(archivo_pdf, 'rb') as f:
                 pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
@@ -661,6 +666,12 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             json=payload,
             timeout=120
         )
+
+        if response.status_code == 413:
+            return jsonify({
+                'success': False,
+                'error': f'El pliego es demasiado grande para el análisis automático ({tamano_mb:.1f} MB). Descárgalo manualmente desde el portal SECP para revisarlo.'
+            }), 400
 
         if response.status_code != 200:
             raise Exception(f"Error de Claude API: {response.status_code}")
@@ -1773,6 +1784,13 @@ Analiza el pliego y responde SOLO con este JSON:
 }}"""
 
         if es_pdf_imagen:
+            try:
+                tamano_pdf_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+            except Exception:
+                tamano_pdf_mb = 0
+            if tamano_pdf_mb > 20:
+                print(f"analizar_pliego_desde_cache: PDF imagen de {tamano_pdf_mb:.1f} MB — demasiado grande, omitiendo")
+                return None
             print("analizar_pliego_desde_cache: enviando PDF como documento nativo...")
             with open(pdf_path, 'rb') as f:
                 pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
@@ -1797,6 +1815,9 @@ Analiza el pliego y responde SOLO con este JSON:
             },
             timeout=90
         )
+        if resp.status_code == 413:
+            print(f"analizar_pliego_desde_cache: PDF demasiado grande para Claude API — omitiendo analisis")
+            return None
         if resp.status_code != 200:
             return None
         texto_resp = resp.json()['content'][0]['text']
