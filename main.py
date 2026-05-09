@@ -2301,14 +2301,24 @@ function abrirKanban(){{
 }}
 async function generarF033Reporte(btn){{
   btn.disabled = true;
-  btn.textContent = 'Generando...';
+  btn.textContent = 'Generando... (1-2 min)';
   try{{
     var resp = await fetch('/agente-033', {{
       method: 'POST',
       headers: {{'Content-Type': 'application/json'}},
       body: JSON.stringify({{referencia: '{referencia}'}})
     }});
-    if(!resp.ok) throw new Error('Error ' + resp.status);
+    if(!resp.ok) {{
+      var msg = 'Error ' + resp.status;
+      if(resp.status === 504) {{
+        msg = 'ZIP muy grande o servidor lento. Descárgalo manualmente desde el portal SECP.';
+      }} else if(resp.status === 404) {{
+        msg = 'No se encontró el F033 (puede ser Comparación de Precios sin formulario).';
+      }} else if(resp.status === 500) {{
+        try {{ var errData = await resp.json(); msg = errData.error || msg; }} catch(ex) {{}}
+      }}
+      throw new Error(msg);
+    }}
     var blob = await resp.blob();
     var url  = URL.createObjectURL(blob);
     var a    = document.createElement('a');
@@ -2319,8 +2329,13 @@ async function generarF033Reporte(btn){{
     btn.style.background = '#3B6D11';
     btn.style.color = '#fff';
   }} catch(e){{
-    btn.textContent = 'Error — reintentar';
-    btn.disabled = false;
+    btn.style.background = '#DC2626';
+    btn.textContent = '✗ ' + e.message.substring(0, 60);
+    setTimeout(function(){{
+      btn.textContent = 'Reintentar';
+      btn.style.background = '#BA7517';
+      btn.disabled = false;
+    }}, 5000);
   }}
 }}
 </script>
