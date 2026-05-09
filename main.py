@@ -2032,13 +2032,17 @@ def generar_html_reporte(referencia, datos):
         total_human += 1
     s3 = sprint_sec('3', 'Oferta Técnica', t3)
 
+    tiene_f033 = datos.get('tiene_f033')  # None=no verificado, True=existe, False=no existe
     t4 = []
     if f033_url:
         t4.append(f'<div class="task"><span class="dot green"></span><span class="task-txt">F033 pre-llenado generado por Agente 033 — <a href="{f033_url}" target="_blank" style="background:#3B6D11;color:#fff;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">⬇ Descargar</a></span></div>')
         total_claude += 1
+    elif tiene_f033 is False:
+        t4.append(t_human('Oferta económica manual — esta licitación no incluye formulario F033'))
+        total_human += 1
     else:
         btn_f033 = f'<button onclick="generarF033Reporte(this)" style="display:inline-block;padding:2px 9px;background:#BA7517;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px;vertical-align:middle;">Generar F033 →</button>'
-        t4.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">F033 pre-llenado — el ZIP no estaba disponible al generar el reporte{btn_f033}</span></div>')
+        t4.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">F033 pre-llenado{btn_f033}</span></div>')
         total_human += 1
 
     if precios:
@@ -2400,21 +2404,26 @@ def generar_reporte():
         zip_ok    = os.path.exists(zip_path) and (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
         pdf_cache = verificar_archivo_en_cache(referencia)
 
-        if not zip_ok and not pdf_cache:
-            print("PASO 1: Descargando pliego y ZIP (primera vez)...")
+        if not zip_ok:
+            if pdf_cache:
+                print("PASO 1: PDF en cache — descargando ZIP para formularios y F033...")
+            else:
+                print("PASO 1: Descargando pliego y ZIP (primera vez)...")
             try:
                 os.makedirs(TEMP_DIR, exist_ok=True)
                 descargar_pliego(referencia, guardar_zip=True)
-                zip_ok    = os.path.exists(zip_path)
-                pdf_cache = verificar_archivo_en_cache(referencia)
+                zip_ok = os.path.exists(zip_path)
+                if not pdf_cache:
+                    pdf_cache = verificar_archivo_en_cache(referencia)
                 print(f"  ZIP: {'OK' if zip_ok else 'no disponible'} | PDF: {'OK' if pdf_cache else 'no disponible'}")
             except Exception as e:
                 print(f"  Error descargando: {e} — continuando sin ZIP/PDF")
         else:
-            print(f"PASO 1: ZIP en caché: {zip_ok} | PDF en caché: {pdf_cache is not None}")
+            print(f"PASO 1: ZIP en cache OK | PDF en cache: {pdf_cache is not None}")
 
-        # ── PASO 1.5: Detectar formularios adicionales en el ZIP ─────────────
+        # ── PASO 1.5: Detectar formularios y F033 en el ZIP ──────────────────
         formularios_adicionales = []
+        tiene_f033 = None  # None = ZIP no disponible para verificar
         if zip_ok:
             try:
                 FORMAS_CONOCIDAS = [
@@ -2424,6 +2433,7 @@ def generar_reporte():
                     ({'056', 'muestra', 'entrega_de_muestra'}, 'F056', 'Formulario F056 — Entrega de Muestras', 3),
                 ]
                 vistos = set()
+                tiene_f033 = False
                 with zipfile.ZipFile(zip_path, 'r') as zf:
                     for archivo in zf.namelist():
                         if '1_Publicaciones/Adjuntos/' not in archivo:
@@ -2432,12 +2442,14 @@ def generar_reporte():
                             continue
                         nombre = os.path.basename(archivo).lower().replace(' ', '_')
                         if '033' in nombre:
+                            tiene_f033 = True
                             continue
                         for claves, codigo, etiqueta, sprint in FORMAS_CONOCIDAS:
                             if codigo not in vistos and any(c in nombre for c in claves):
                                 formularios_adicionales.append({'codigo': codigo, 'nombre': etiqueta, 'sprint': sprint})
                                 vistos.add(codigo)
                                 break
+                print(f"  F033 en ZIP: {'Si' if tiene_f033 else 'No'}")
                 print(f"  Formularios adicionales: {[f['codigo'] for f in formularios_adicionales] or 'ninguno'}")
             except Exception as e:
                 print(f"  Error inspeccionando formularios: {e}")
@@ -2548,6 +2560,7 @@ def generar_reporte():
             'f033_url':          f033_url,
             'pliego_url':        pliego_url,
             'formularios_adicionales': formularios_adicionales,
+            'tiene_f033':              tiene_f033,
         }
         html = generar_html_reporte(referencia, datos)
 
