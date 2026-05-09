@@ -1702,7 +1702,7 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
         return None
 
 
-def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key):
+def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key, monto=0):
     """Ejecuta analisis de pliego sobre un PDF ya descargado. Soporta PDFs de imagen via base64."""
     try:
         # ── Intentar extraccion de texto ─────────────────────────────────────
@@ -1729,11 +1729,12 @@ def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_
 
         fecha_hoy = datetime.now().strftime('%d/%m/%Y')
         perfil_txt = f"\nDescripcion: {empresa_desc}" if empresa_desc else ""
+        monto_txt  = f"\n- Monto oficial: RD${float(monto):,.2f} — usa esta cifra en la sintesis, no extraigas un monto diferente del documento" if monto else ""
         prompt = f"""Eres un experto analista de licitaciones publicas dominicanas.
 
 CONTEXTO:
 - Referencia: {referencia}
-- Titulo: {titulo}
+- Titulo: {titulo}{monto_txt}
 {perfil_txt}
 
 ---INICIO DEL PLIEGO---
@@ -2488,7 +2489,10 @@ def generar_reporte():
         if not analisis_pliego and pdf_cache:
             print("PASO 3: Análisis del pliego no encontrado — ejecutando desde PDF...")
             titulo_lic = licitacion.get('descripcion', '')
-            analisis_pliego = analizar_pliego_desde_cache(pdf_cache, referencia, titulo_lic, empresa_desc, api_key)
+            analisis_pliego = analizar_pliego_desde_cache(
+                pdf_cache, referencia, titulo_lic, empresa_desc, api_key,
+                monto=licitacion.get('monto', 0)
+            )
             if analisis_pliego and db_url and empresa_id:
                 try:
                     conn = psycopg2.connect(db_url)
