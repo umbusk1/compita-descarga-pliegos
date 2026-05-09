@@ -950,6 +950,32 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
     return sorted(todos_items.values(), key=clave_orden)
 
 
+def extraer_docx_de_adjuntos(zf):
+    """
+    Devuelve lista de (nombre_lower, bytes) de todos los .docx/.doc en
+    1_Publicaciones/Adjuntos/, incluyendo los que estén dentro de ZIPs anidados
+    (ej: carpeta FORMULARIOS.zip dentro de Adjuntos).
+    """
+    resultado = []
+    for archivo in zf.namelist():
+        if '1_Publicaciones/Adjuntos/' not in archivo:
+            continue
+        nombre = os.path.basename(archivo).lower()
+        if archivo.lower().endswith(('.docx', '.doc')):
+            resultado.append((nombre, zf.read(archivo)))
+        elif archivo.lower().endswith('.zip'):
+            try:
+                nested_bytes = zf.read(archivo)
+                with zipfile.ZipFile(io.BytesIO(nested_bytes), 'r') as nzf:
+                    for na in nzf.namelist():
+                        nn = os.path.basename(na).lower()
+                        if na.lower().endswith(('.docx', '.doc')):
+                            resultado.append((nn, nzf.read(na)))
+            except Exception as e:
+                print(f"Error leyendo ZIP anidado {nombre}: {e}")
+    return resultado
+
+
 def llenar_f033(docx_bytes, items):
     doc = Document(io.BytesIO(docx_bytes))
     tabla = None
@@ -1128,8 +1154,19 @@ def agente_033():
                         print(f"  Listado: {os.path.basename(archivo)}")
 
         if not f033_bytes:
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zf_retry:
+                    for nombre_doc, doc_bytes in extraer_docx_de_adjuntos(zf_retry):
+                        if '033' in nombre_doc:
+                            f033_bytes = doc_bytes
+                            print(f"  F033 encontrado en ZIP anidado: {nombre_doc}")
+                            break
+            except Exception as e:
+                print(f"  Error buscando F033 en ZIP anidado: {e}")
+
+        if not f033_bytes:
             return jsonify({
-                "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/. Esta licitacion puede ser Comparacion de Precios."
+                "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
             }), 404
 
         candidatos = []
@@ -2475,12 +2512,8 @@ def generar_reporte():
                 vistos = set()
                 tiene_f033 = False
                 with zipfile.ZipFile(zip_path, 'r') as zf:
-                    for archivo in zf.namelist():
-                        if '1_Publicaciones/Adjuntos/' not in archivo:
-                            continue
-                        if not archivo.lower().endswith(('.docx', '.doc')):
-                            continue
-                        nombre = os.path.basename(archivo).lower().replace(' ', '_')
+                    for nombre_doc, _ in extraer_docx_de_adjuntos(zf):
+                        nombre = nombre_doc.replace(' ', '_')
                         if '033' in nombre:
                             tiene_f033 = True
                             continue
