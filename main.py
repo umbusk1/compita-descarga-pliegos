@@ -11,7 +11,8 @@ import json
 import requests
 import io
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
 from pypdf import PdfReader
 from json_repair import repair_json
 from copy import deepcopy
@@ -975,6 +976,129 @@ def extraer_docx_de_adjuntos(zf):
                 print(f"Error leyendo ZIP anidado {nombre}: {e}")
     return resultado
 
+# ══════════════════════════════════════════════════════════════════════════════
+# CAMBIO 1 — NUEVA FUNCIÓN
+# Pega esta función JUSTO ANTES de def llenar_f033(...)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
+    """
+    Genera un Word de oferta economica cuando la licitacion no tiene F033.
+    Pre-llena item, descripcion, unidad, cantidad e ITBIS.
+    Deja precio unitario y total en blanco para que el usuario los complete.
+    """
+    from docx.shared import Inches, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    doc = Document()
+
+    # ── Margenes compactos ───────────────────────────────────────────────────
+    for section in doc.sections:
+        section.top_margin    = Inches(0.75)
+        section.bottom_margin = Inches(0.75)
+        section.left_margin   = Inches(0.9)
+        section.right_margin  = Inches(0.9)
+
+    # ── Titulo ───────────────────────────────────────────────────────────────
+    p_titulo = doc.add_paragraph()
+    p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run_titulo = p_titulo.add_run("FORMULARIO DE OFERTA ECONOMICA")
+    run_titulo.bold = True
+    run_titulo.font.size = Pt(13)
+
+    # ── Nota de origen ───────────────────────────────────────────────────────
+    p_nota = doc.add_paragraph()
+    run_label = p_nota.add_run("NOTA: ")
+    run_label.bold = True
+    run_label.font.size = Pt(8)
+    run_label.font.color.rgb = RGBColor(0x92, 0x40, 0x0E)
+    run_texto = p_nota.add_run(
+        f"Este formulario fue generado automaticamente por Agente 033 de Compita "
+        f"a partir de la ficha tecnica \"{nombre_ficha}\". "
+        f"Verifique los campos contra el pliego original antes de presentar. "
+        f"Complete los precios unitarios y totales antes de la presentacion."
+    )
+    run_texto.font.size = Pt(8)
+    run_texto.font.color.rgb = RGBColor(0x92, 0x40, 0x0E)
+    doc.add_paragraph()
+
+    # ── Politica ITBIS global ─────────────────────────────────────────────────
+    politica_global = 'NO_ESPECIFICADO'
+    for item in items:
+        p = item.get('politica_itbis', '')
+        if p:
+            politica_global = p
+            break
+    print(f"  Politica ITBIS (oferta desde ficha): {politica_global}")
+
+    # ── Tabla ────────────────────────────────────────────────────────────────
+    # Columnas: No. | Descripcion | Unidad | Cantidad | P.Unitario | ITBIS | Total
+    tabla = doc.add_table(rows=1, cols=7)
+    tabla.style = 'Table Grid'
+
+    anchos = [0.45, 3.0, 0.7, 0.7, 1.0, 0.6, 1.0]
+    cabeceras = ['No.', 'Descripcion', 'Unidad', 'Cantidad',
+                 'Precio Unitario', 'ITBIS', 'Total']
+
+    fila_cab = tabla.rows[0]
+    for i, (cab, ancho) in enumerate(zip(cabeceras, anchos)):
+        cel = fila_cab.cells[i]
+        cel.width = Inches(ancho)
+        p = cel.paragraphs[0]
+        p.clear()
+        run = p.add_run(cab)
+        run.bold = True
+        run.font.size = Pt(8)
+
+    # ── Filas de items ────────────────────────────────────────────────────────
+    for item in items:
+        fila = tabla.add_row()
+        celdas = fila.cells
+
+        lote = str(item.get('lote', '')).strip()
+        num  = item.get('numero', '')
+        etiqueta = f"L-{lote}-{num}" if lote else str(num)
+
+        itbis_aplica = item.get('itbis_aplica', True)
+        if politica_global == 'EXENTO':
+            valor_itbis = '0%'
+        elif politica_global == 'INCLUIDO':
+            valor_itbis = 'Incluido'
+        else:
+            valor_itbis = '18%' if itbis_aplica else '0%'
+
+        valores = [
+            etiqueta,
+            item.get('descripcion', ''),
+            item.get('unidad', ''),
+            str(item.get('cantidad', '')) if item.get('cantidad') is not None else '',
+            '',           # precio unitario — en blanco
+            valor_itbis,
+            '',           # total — en blanco
+        ]
+        for i, val in enumerate(valores):
+            p = celdas[i].paragraphs[0]
+            p.clear()
+            run = p.add_run(val)
+            run.font.size = Pt(8)
+
+    # ── Fila TOTAL ────────────────────────────────────────────────────────────
+    fila_total = tabla.add_row()
+    cel_label = fila_total.cells[0]
+    # Fusionar celdas 0-5 para la etiqueta "VALOR TOTAL"
+    for j in range(1, 5):
+        cel_label = cel_label.merge(fila_total.cells[j])
+    p_total = cel_label.paragraphs[0]
+    p_total.clear()
+    run_total = p_total.add_run('VALOR TOTAL')
+    run_total.bold = True
+    run_total.font.size = Pt(8)
+    # La celda de total (col 6) queda en blanco para que el usuario complete
+
+    output = io.BytesIO()
+    doc.save(output)
+    output.seek(0)
+    return output.getvalue()
 
 def llenar_f033(docx_bytes, items):
     doc = Document(io.BytesIO(docx_bytes))
@@ -1128,23 +1252,24 @@ def agente_033():
                 return jsonify({
                     "error": "El ZIP no contiene la carpeta 1_Publicaciones/Adjuntos/. La estructura del expediente es diferente a la esperada."
                 }), 500
-
+                
+nombre_ficha_encontrada = None
             for archivo in archivos:
                 if '1_Publicaciones/Adjuntos/' not in archivo:
                     continue
                 nombre = os.path.basename(archivo).lower()
-
                 if archivo.lower().endswith(('.docx', '.doc')):
                     if '033' in nombre:
                         f033_bytes = zf.read(archivo)
                         print(f"  F033 encontrado: {os.path.basename(archivo)}")
-
                 if archivo.lower().endswith('.pdf'):
                     es_ficha = any(k in nombre for k in ['ficha', 'tecnica'])
                     es_pliego = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
                     es_listado = any(k in nombre for k in ['listado', 'especificacion'])
                     if es_ficha:
                         fichas_prioritarias.append(zf.read(archivo))
+                        if not nombre_ficha_encontrada:
+                            nombre_ficha_encontrada = os.path.basename(archivo)
                         print(f"  Ficha tecnica: {os.path.basename(archivo)}")
                     elif es_pliego:
                         fichas_pliego.append(zf.read(archivo))
@@ -1164,10 +1289,15 @@ def agente_033():
             except Exception as e:
                 print(f"  Error buscando F033 en ZIP anidado: {e}")
 
+        usar_ficha_fallback = False
         if not f033_bytes:
-            return jsonify({
-                "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
-            }), 404
+            if fichas_prioritarias:
+                usar_ficha_fallback = True
+                print(f"  F033 no encontrado — usando ficha tecnica como fallback")
+            else:
+                return jsonify({
+                    "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
+                }), 404
 
         candidatos = []
         if fichas_pliego:
@@ -1179,10 +1309,10 @@ def agente_033():
 
         if not candidatos:
             return jsonify({
-                "error": "No es posible procesar el F033 porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
+                "error": "No es posible procesar el formulario porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
             }), 404
 
-        print(f"  F033 OK | Candidatos: {[c[0] for c in candidatos]}")
+        print(f"  F033: {'SI' if not usar_ficha_fallback else 'NO (usando ficha tecnica)'} | Candidatos: {[c[0] for c in candidatos]}")
 
         print("PASO 3: Extrayendo items con Claude...")
         items = []
@@ -1199,15 +1329,24 @@ def agente_033():
         if not items:
             return jsonify({"error": "Claude no extrajo items de ninguno de los PDFs disponibles"}), 500
 
-        print("PASO 4: Generando F033 pre-llenado...")
-        docx_relleno = llenar_f033(f033_bytes, items)
-        print(f"  Word listo ({len(docx_relleno)} bytes)")
+        print("PASO 4: Generando formulario de oferta...")
+        if usar_ficha_fallback:
+            docx_relleno = generar_oferta_desde_ficha(
+                items,
+                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"
+            )
+            nombre_descarga = f"Ficha_Tecnica_{nombre_seguro}.docx"
+            print(f"  Oferta desde ficha tecnica lista ({len(docx_relleno)} bytes)")
+        else:
+            docx_relleno = llenar_f033(f033_bytes, items)
+            nombre_descarga = f"F033_{nombre_seguro}.docx"
+            print(f"  F033 pre-llenado listo ({len(docx_relleno)} bytes)")
 
         return send_file(
             io.BytesIO(docx_relleno),
             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
             as_attachment=True,
-            download_name=f"F033_{nombre_seguro}.docx"
+            download_name=nombre_descarga
         )
 
     except Exception as e:
@@ -1594,11 +1733,12 @@ def generar_f033_y_cachear(referencia):
     zip_path = f"{TEMP_DIR}/{nombre_seguro}.zip"
 
     if not os.path.exists(zip_path):
-        return None, "ZIP no disponible — no se puede generar F033"
+        return None, "ZIP no disponible — no se puede generar formulario"
 
     try:
         f033_bytes = None
         fichas_prioritarias, fichas_pliego, fichas_secundarias = [], [], []
+        nombre_ficha_encontrada = None                          # <── NUEVO
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             archivos = zf.namelist()
@@ -1614,20 +1754,28 @@ def generar_f033_y_cachear(referencia):
                 if archivo.lower().endswith('.pdf'):
                     if any(k in nombre for k in ['ficha', 'tecnica']):
                         fichas_prioritarias.append(zf.read(archivo))
+                        if not nombre_ficha_encontrada:         # <── NUEVO
+                            nombre_ficha_encontrada = os.path.basename(archivo)  # <── NUEVO
                     elif any(k in nombre for k in ['pliego', 'condiciones', 'terminos']):
                         fichas_pliego.append(zf.read(archivo))
                     elif any(k in nombre for k in ['listado', 'especificacion']):
                         fichas_secundarias.append(zf.read(archivo))
 
-        if not f033_bytes:
-            return None, "F033 (.docx) no encontrado en el ZIP"
+        # Fallback: ficha tecnica si no hay F033                # <── NUEVO
+        usar_ficha_fallback = False                             # <── NUEVO
+        if not f033_bytes:                                      # <── NUEVO
+            if fichas_prioritarias:                             # <── NUEVO
+                usar_ficha_fallback = True                      # <── NUEVO
+                print(f"  generar_f033_y_cachear: F033 no encontrado, usando ficha tecnica")  # <── NUEVO
+            else:
+                return None, "F033 (.docx) no encontrado y no hay ficha tecnica disponible"  # <── MODIFICADO
 
         candidatos = []
         if fichas_pliego:       candidatos.append(fichas_pliego)
         if fichas_prioritarias: candidatos.append(fichas_prioritarias)
         if fichas_secundarias:  candidatos.append(fichas_secundarias)
         if not candidatos:
-            return None, "No hay PDFs con ítems en el ZIP"
+            return None, "No hay PDFs con items en el ZIP"
 
         items = []
         for fichas in candidatos:
@@ -1636,22 +1784,30 @@ def generar_f033_y_cachear(referencia):
                 break
 
         if not items:
-            return None, "No se extrajeron ítems del ZIP"
+            return None, "No se extrajeron items del ZIP"
 
-        docx_bytes = llenar_f033(f033_bytes, items)
+            # Generar Word segun disponibilidad                     # <── NUEVO
+        if usar_ficha_fallback:                                 # <── NUEVO
+            docx_bytes = generar_oferta_desde_ficha(           # <── NUEVO
+                items,                                          # <── NUEVO
+                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"  # <── NUEVO
+            )                                                   # <── NUEVO
+            prefijo = "Ficha_Tecnica"                           # <── MODIFICADO
+        else:
+            docx_bytes = llenar_f033(f033_bytes, items)
+            prefijo = "F033"
 
         os.makedirs(F033_DIR, exist_ok=True)
-        ruta = os.path.join(F033_DIR, f"F033_{nombre_seguro}.docx")
+        ruta = os.path.join(F033_DIR, f"{prefijo}_{nombre_seguro}.docx")  # <── MODIFICADO
         with open(ruta, 'wb') as f:
             f.write(docx_bytes)
 
-        print(f"F033 generado y cacheado: {ruta}")
+        print(f"  Formulario generado y cacheado: {ruta}")
         return ruta, None
 
     except Exception as e:
-        print(f"Error generando F033: {e}")
+        print(f"Error generando formulario: {e}")
         return None, str(e)
-
 
 def mapear_catalogo_con_claude(empresa_desc, requisitos, api_key):
     if not empresa_desc or not requisitos:
