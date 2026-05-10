@@ -399,7 +399,6 @@ def endpoint_descargar_pliego():
         return jsonify({"error": str(e)}), 500
 
 
-# ── NUEVO: buscar precios históricos en precios_referencia ─────────────────
 def buscar_precios_referencia(titulo, descripcion):
     db_url = os.environ.get('DATABASE_URL')
     if not db_url:
@@ -481,7 +480,6 @@ def analizar_pliego():
                 'error': f'El pliego es demasiado grande ({tamano_mb:.1f} MB). Limite: 50 MB.'
             }), 400
 
-        # ── CAMBIO 1: Detección de PDF imagen ────────────────────────────────
         print(f"Extrayendo texto del PDF...")
         es_pdf_imagen = False
         texto_completo = ""
@@ -512,9 +510,7 @@ def analizar_pliego():
                 'success': False,
                 'error': f'Error al procesar el PDF: {str(e)}'
             }), 400
-        # ─────────────────────────────────────────────────────────────────────
 
-        # ── NUEVO: buscar precios históricos ──────────────────────────────────
         print(f"Buscando precios historicos de referencia...")
         precios_ref = buscar_precios_referencia(titulo, descripcion)
         print(f"Precios historicos encontrados: {len(precios_ref)} items")
@@ -527,16 +523,15 @@ def analizar_pliego():
                     f"- {p['descripcion']} ({p['unidad_medida'] or 'sin unidad'}): "
                     f"promedio {p['precio_promedio']:,.2f} {p['moneda']} "
                     f"[rango {p['precio_minimo']:,.2f} – {p['precio_maximo']:,.2f}] "
-                    f"({p['num_referencias']} ofertas históricas)"
+                    f"({p['num_referencias']} ofertas historicas)"
                 )
             bloque_precios = f"""
-PRECIOS HISTÓRICOS DE REFERENCIA (base de datos interna Compita, licitaciones adjudicadas 2026):
+PRECIOS HISTORICOS DE REFERENCIA (base de datos interna Compita, licitaciones adjudicadas 2026):
 {chr(10).join(lineas)}
 
 Usa estos precios como contexto para evaluar si los montos estimados del pliego son razonables.
-Si algún ítem del pliego coincide con los anteriores, menciónalo en tu análisis.
+Si algun item del pliego coincide con los anteriores, menciónalo en tu analisis.
 """
-        # ─────────────────────────────────────────────────────────────────────
 
         perfil_empresa = ""
         if empresa_descripcion:
@@ -596,12 +591,12 @@ Analiza el pliego y proporciona un analisis estructurado en formato JSON con est
     "en_contra": ["Riesgo 1", "Riesgo 2", "Riesgo 3"]
   }},
   "precios_historicos": {json.dumps([
-      {{"item": p["descripcion"][:80],
-        "precio_promedio": p["precio_promedio"],
-        "precio_minimo": p["precio_minimo"],
-        "precio_maximo": p["precio_maximo"],
-        "num_referencias": p["num_referencias"],
-        "moneda": p["moneda"]}}
+      {"item": p["descripcion"][:80],
+       "precio_promedio": p["precio_promedio"],
+       "precio_minimo": p["precio_minimo"],
+       "precio_maximo": p["precio_maximo"],
+       "num_referencias": p["num_referencias"],
+       "moneda": p["moneda"]}
       for p in precios_ref
   ], ensure_ascii=False) if precios_ref else "[]"}
 }}
@@ -621,12 +616,11 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             "anthropic-version": "2023-06-01"
         }
 
-        # ── CAMBIO 2: Payload según tipo de PDF ──────────────────────────────
         if es_pdf_imagen:
             if tamano_mb > 20:
                 return jsonify({
                     'success': False,
-                    'error': f'El pliego ({tamano_mb:.1f} MB) no tiene texto extraíble y supera el límite para análisis de imagen (~20 MB). Descárgalo manualmente desde el portal SECP para revisarlo.'
+                    'error': f'El pliego ({tamano_mb:.1f} MB) no tiene texto extraible y supera el limite para analisis de imagen (~20 MB). Descargalo manualmente desde el portal SECP para revisarlo.'
                 }), 400
             print("Enviando PDF imagen directamente a Claude AI (modo documento nativo)...")
             with open(archivo_pdf, 'rb') as f:
@@ -659,7 +653,6 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
                 "max_tokens": 3000,
                 "messages": [{"role": "user", "content": prompt_analisis}]
             }
-        # ─────────────────────────────────────────────────────────────────────
 
         response = requests.post(
             "https://api.anthropic.com/v1/messages",
@@ -671,7 +664,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
         if response.status_code == 413:
             return jsonify({
                 'success': False,
-                'error': f'El pliego es demasiado grande para el análisis automático ({tamano_mb:.1f} MB). Descárgalo manualmente desde el portal SECP para revisarlo.'
+                'error': f'El pliego es demasiado grande para el analisis automatico ({tamano_mb:.1f} MB). Descargalo manualmente desde el portal SECP para revisarlo.'
             }), 400
 
         if response.status_code != 200:
@@ -761,8 +754,6 @@ def cache_limpiar():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-
-# ── FUNCION AUXILIAR: extrae items del PDF con Claude ────────────────────────
 
 def extraer_items_con_claude(pdf_bytes_list, referencia):
 
@@ -952,11 +943,6 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
 
 
 def extraer_docx_de_adjuntos(zf):
-    """
-    Devuelve lista de (nombre_lower, bytes) de todos los .docx/.doc en
-    1_Publicaciones/Adjuntos/, incluyendo los que estén dentro de ZIPs anidados
-    (ej: carpeta FORMULARIOS.zip dentro de Adjuntos).
-    """
     resultado = []
     for archivo in zf.namelist():
         if '1_Publicaciones/Adjuntos/' not in archivo:
@@ -975,38 +961,26 @@ def extraer_docx_de_adjuntos(zf):
             except Exception as e:
                 print(f"Error leyendo ZIP anidado {nombre}: {e}")
     return resultado
-
-# ══════════════════════════════════════════════════════════════════════════════
-# CAMBIO 1 — NUEVA FUNCIÓN
-# Pega esta función JUSTO ANTES de def llenar_f033(...)
-# ══════════════════════════════════════════════════════════════════════════════
-
 def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
     """
     Genera un Word de oferta economica cuando la licitacion no tiene F033.
     Pre-llena item, descripcion, unidad, cantidad e ITBIS.
     Deja precio unitario y total en blanco para que el usuario los complete.
     """
-    from docx.shared import Inches, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-
     doc = Document()
 
-    # ── Margenes compactos ───────────────────────────────────────────────────
     for section in doc.sections:
         section.top_margin    = Inches(0.75)
         section.bottom_margin = Inches(0.75)
         section.left_margin   = Inches(0.9)
         section.right_margin  = Inches(0.9)
 
-    # ── Titulo ───────────────────────────────────────────────────────────────
     p_titulo = doc.add_paragraph()
     p_titulo.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run_titulo = p_titulo.add_run("FORMULARIO DE OFERTA ECONOMICA")
     run_titulo.bold = True
     run_titulo.font.size = Pt(13)
 
-    # ── Nota de origen ───────────────────────────────────────────────────────
     p_nota = doc.add_paragraph()
     run_label = p_nota.add_run("NOTA: ")
     run_label.bold = True
@@ -1022,7 +996,6 @@ def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
     run_texto.font.color.rgb = RGBColor(0x92, 0x40, 0x0E)
     doc.add_paragraph()
 
-    # ── Politica ITBIS global ─────────────────────────────────────────────────
     politica_global = 'NO_ESPECIFICADO'
     for item in items:
         p = item.get('politica_itbis', '')
@@ -1031,8 +1004,6 @@ def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
             break
     print(f"  Politica ITBIS (oferta desde ficha): {politica_global}")
 
-    # ── Tabla ────────────────────────────────────────────────────────────────
-    # Columnas: No. | Descripcion | Unidad | Cantidad | P.Unitario | ITBIS | Total
     tabla = doc.add_table(rows=1, cols=7)
     tabla.style = 'Table Grid'
 
@@ -1050,7 +1021,6 @@ def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
         run.bold = True
         run.font.size = Pt(8)
 
-    # ── Filas de items ────────────────────────────────────────────────────────
     for item in items:
         fila = tabla.add_row()
         celdas = fila.cells
@@ -1072,9 +1042,9 @@ def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
             item.get('descripcion', ''),
             item.get('unidad', ''),
             str(item.get('cantidad', '')) if item.get('cantidad') is not None else '',
-            '',           # precio unitario — en blanco
+            '',
             valor_itbis,
-            '',           # total — en blanco
+            '',
         ]
         for i, val in enumerate(valores):
             p = celdas[i].paragraphs[0]
@@ -1082,10 +1052,8 @@ def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
             run = p.add_run(val)
             run.font.size = Pt(8)
 
-    # ── Fila TOTAL ────────────────────────────────────────────────────────────
     fila_total = tabla.add_row()
     cel_label = fila_total.cells[0]
-    # Fusionar celdas 0-5 para la etiqueta "VALOR TOTAL"
     for j in range(1, 5):
         cel_label = cel_label.merge(fila_total.cells[j])
     p_total = cel_label.paragraphs[0]
@@ -1093,12 +1061,12 @@ def generar_oferta_desde_ficha(items, nombre_ficha="ficha tecnica"):
     run_total = p_total.add_run('VALOR TOTAL')
     run_total.bold = True
     run_total.font.size = Pt(8)
-    # La celda de total (col 6) queda en blanco para que el usuario complete
 
     output = io.BytesIO()
     doc.save(output)
     output.seek(0)
     return output.getvalue()
+
 
 def llenar_f033(docx_bytes, items):
     doc = Document(io.BytesIO(docx_bytes))
@@ -1231,134 +1199,129 @@ def agente_033():
         fichas_secundarias = []
 
         try:
-	            zf_handle = zipfile.ZipFile(zip_path, 'r')
-	        except zipfile.BadZipFile:
-	            return jsonify({
-	                "error": "El archivo descargado del SECP esta corrupto o incompleto. Intenta de nuevo."
-	            }), 500
-	        except Exception as e:
-	            return jsonify({
-	                "error": f"No se pudo abrir el archivo ZIP: {str(e)}"
-	            }), 500
-	
-	        with zf_handle as zf:
-	            archivos = zf.namelist()
-	
-	            if not archivos:
-	                return jsonify({"error": "El ZIP descargado esta vacio."}), 500
-	
-	            tiene_adjuntos = any('1_Publicaciones/Adjuntos/' in a for a in archivos)
-	            if not tiene_adjuntos:
-	                return jsonify({
-	                    "error": "El ZIP no contiene la carpeta 1_Publicaciones/Adjuntos/. La estructura del expediente es diferente a la esperada."
-	                }), 500
-	
-	            nombre_ficha_encontrada = None
-	            for archivo in archivos:
-	                if '1_Publicaciones/Adjuntos/' not in archivo:
-	                    continue
-	                nombre = os.path.basename(archivo).lower()
-	
-	                if archivo.lower().endswith(('.docx', '.doc')):
-	                    if '033' in nombre:
-	                        f033_bytes = zf.read(archivo)
-	                        print(f"  F033 encontrado: {os.path.basename(archivo)}")
-	
-	                if archivo.lower().endswith('.pdf'):
-	                    es_ficha = any(k in nombre for k in ['ficha', 'tecnica'])
-	                    es_pliego = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
-	                    es_listado = any(k in nombre for k in ['listado', 'especificacion'])
-	                    if es_ficha:
-	                        fichas_prioritarias.append(zf.read(archivo))
-	                        if not nombre_ficha_encontrada:
-	                            nombre_ficha_encontrada = os.path.basename(archivo)
-	                        print(f"  Ficha tecnica: {os.path.basename(archivo)}")
-	                    elif es_pliego:
-	                        fichas_pliego.append(zf.read(archivo))
-	                        print(f"  Pliego: {os.path.basename(archivo)}")
-	                    elif es_listado:
-	                        fichas_secundarias.append(zf.read(archivo))
-	                        print(f"  Listado: {os.path.basename(archivo)}")
-	
-	        if not f033_bytes:
-	            try:
-	                with zipfile.ZipFile(zip_path, 'r') as zf_retry:
-	                    for nombre_doc, doc_bytes in extraer_docx_de_adjuntos(zf_retry):
-	                        if '033' in nombre_doc:
-	                            f033_bytes = doc_bytes
-	                            print(f"  F033 encontrado en ZIP anidado: {nombre_doc}")
-	                            break
-	            except Exception as e:
-	                print(f"  Error buscando F033 en ZIP anidado: {e}")
-	
-	        usar_ficha_fallback = False
-	        if not f033_bytes:
-	            if fichas_prioritarias:
-	                usar_ficha_fallback = True
-	                print(f"  F033 no encontrado — usando ficha tecnica como fallback")
-	            else:
-	                return jsonify({
-	                    "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
-	                }), 404
-	
-	        candidatos = []
-	        if fichas_pliego:
-	            candidatos.append(('pliego', fichas_pliego))
-	        if fichas_prioritarias:
-	            candidatos.append(('ficha tecnica', fichas_prioritarias))
-	        if fichas_secundarias:
-	            candidatos.append(('listado', fichas_secundarias))
-	
-	        if not candidatos:
-	            return jsonify({
-	                "error": "No es posible procesar el formulario porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
-	            }), 404
-	
-	        print(f"  F033: {'SI' if not usar_ficha_fallback else 'NO (usando ficha tecnica)'} | Candidatos: {[c[0] for c in candidatos]}")
-	
-	        print("PASO 3: Extrayendo items con Claude...")
-	        items = []
-	        for nombre_candidato, fichas_bytes in candidatos:
-	            print(f"  Probando con: {nombre_candidato}")
-	            items = extraer_items_con_claude(fichas_bytes, referencia)
-	            print(f"  -> {len(items)} items encontrados")
-	            if len(items) >= 5:
-	                print(f"  Usando {nombre_candidato} ({len(items)} items)")
-	                break
-	            else:
-	                print(f"  Muy pocos items en {nombre_candidato}, probando siguiente...")
-	
-	        if not items:
-	            return jsonify({"error": "Claude no extrajo items de ninguno de los PDFs disponibles"}), 500
-	
-	        print("PASO 4: Generando formulario de oferta...")
-	        if usar_ficha_fallback:
-	            docx_relleno = generar_oferta_desde_ficha(
-	                items,
-	                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"
-	            )
-	            nombre_descarga = f"Ficha_Tecnica_{nombre_seguro}.docx"
-	            print(f"  Oferta desde ficha tecnica lista ({len(docx_relleno)} bytes)")
-	        else:
-	            docx_relleno = llenar_f033(f033_bytes, items)
-	            nombre_descarga = f"F033_{nombre_seguro}.docx"
-	            print(f"  F033 pre-llenado listo ({len(docx_relleno)} bytes)")
-	
-	        return send_file(
-	            io.BytesIO(docx_relleno),
-	            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-	            as_attachment=True,
-	            download_name=nombre_descarga
-	        )
-	
-	    except Exception as e:
-	        print(f"Agente 033 error: {str(e)}")
+            zf_handle = zipfile.ZipFile(zip_path, 'r')
+        except zipfile.BadZipFile:
+            return jsonify({
+                "error": "El archivo descargado del SECP esta corrupto o incompleto. Intenta de nuevo."
+            }), 500
+        except Exception as e:
+            return jsonify({
+                "error": f"No se pudo abrir el archivo ZIP: {str(e)}"
+            }), 500
+
+        with zf_handle as zf:
+            archivos = zf.namelist()
+
+            if not archivos:
+                return jsonify({"error": "El ZIP descargado esta vacio."}), 500
+
+            tiene_adjuntos = any('1_Publicaciones/Adjuntos/' in a for a in archivos)
+            if not tiene_adjuntos:
+                return jsonify({
+                    "error": "El ZIP no contiene la carpeta 1_Publicaciones/Adjuntos/. La estructura del expediente es diferente a la esperada."
+                }), 500
+
+            nombre_ficha_encontrada = None
+            for archivo in archivos:
+                if '1_Publicaciones/Adjuntos/' not in archivo:
+                    continue
+                nombre = os.path.basename(archivo).lower()
+
+                if archivo.lower().endswith(('.docx', '.doc')):
+                    if '033' in nombre:
+                        f033_bytes = zf.read(archivo)
+                        print(f"  F033 encontrado: {os.path.basename(archivo)}")
+
+                if archivo.lower().endswith('.pdf'):
+                    es_ficha   = any(k in nombre for k in ['ficha', 'tecnica'])
+                    es_pliego  = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
+                    es_listado = any(k in nombre for k in ['listado', 'especificacion'])
+                    if es_ficha:
+                        fichas_prioritarias.append(zf.read(archivo))
+                        if not nombre_ficha_encontrada:
+                            nombre_ficha_encontrada = os.path.basename(archivo)
+                        print(f"  Ficha tecnica: {os.path.basename(archivo)}")
+                    elif es_pliego:
+                        fichas_pliego.append(zf.read(archivo))
+                        print(f"  Pliego: {os.path.basename(archivo)}")
+                    elif es_listado:
+                        fichas_secundarias.append(zf.read(archivo))
+                        print(f"  Listado: {os.path.basename(archivo)}")
+
+        if not f033_bytes:
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zf_retry:
+                    for nombre_doc, doc_bytes in extraer_docx_de_adjuntos(zf_retry):
+                        if '033' in nombre_doc:
+                            f033_bytes = doc_bytes
+                            print(f"  F033 encontrado en ZIP anidado: {nombre_doc}")
+                            break
+            except Exception as e:
+                print(f"  Error buscando F033 en ZIP anidado: {e}")
+
+        usar_ficha_fallback = False
+        if not f033_bytes:
+            if fichas_prioritarias:
+                usar_ficha_fallback = True
+                print(f"  F033 no encontrado — usando ficha tecnica como fallback")
+            else:
+                return jsonify({
+                    "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
+                }), 404
+
+        candidatos = []
+        if fichas_pliego:
+            candidatos.append(('pliego', fichas_pliego))
+        if fichas_prioritarias:
+            candidatos.append(('ficha tecnica', fichas_prioritarias))
+        if fichas_secundarias:
+            candidatos.append(('listado', fichas_secundarias))
+
+        if not candidatos:
+            return jsonify({
+                "error": "No es posible procesar el formulario porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
+            }), 404
+
+        print(f"  F033: {'SI' if not usar_ficha_fallback else 'NO (usando ficha tecnica)'} | Candidatos: {[c[0] for c in candidatos]}")
+
+        print("PASO 3: Extrayendo items con Claude...")
+        items = []
+        for nombre_candidato, fichas_bytes in candidatos:
+            print(f"  Probando con: {nombre_candidato}")
+            items = extraer_items_con_claude(fichas_bytes, referencia)
+            print(f"  -> {len(items)} items encontrados")
+            if len(items) >= 5:
+                print(f"  Usando {nombre_candidato} ({len(items)} items)")
+                break
+            else:
+                print(f"  Muy pocos items en {nombre_candidato}, probando siguiente...")
+
+        if not items:
+            return jsonify({"error": "Claude no extrajo items de ninguno de los PDFs disponibles"}), 500
+
+        print("PASO 4: Generando formulario de oferta...")
+        if usar_ficha_fallback:
+            docx_relleno = generar_oferta_desde_ficha(
+                items,
+                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"
+            )
+            nombre_descarga = f"Ficha_Tecnica_{nombre_seguro}.docx"
+            print(f"  Oferta desde ficha tecnica lista ({len(docx_relleno)} bytes)")
+        else:
+            docx_relleno = llenar_f033(f033_bytes, items)
+            nombre_descarga = f"F033_{nombre_seguro}.docx"
+            print(f"  F033 pre-llenado listo ({len(docx_relleno)} bytes)")
+
+        return send_file(
+            io.BytesIO(docx_relleno),
+            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            as_attachment=True,
+            download_name=nombre_descarga
+        )
+
+    except Exception as e:
+        print(f"Agente 033 error: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════════════════════════════
-# BACKFILL ETAPA 1 — Descargar ZIPs y guardar PDFs en ofertas_pendientes
-# ══════════════════════════════════════════════════════════════════════════════
-
 _descarga_estado = {
     "corriendo": False,
     "total": 0,
@@ -1378,7 +1341,6 @@ PALABRAS_EXCLUIR_OFERTA = [
 
 
 def _es_oferta_economica(nombre_pdf):
-    """Decide si un PDF de 3_Ofertas/ es una oferta económica."""
     n = nombre_pdf.lower()
     if 'ranl' in n and 'resumen' not in n:
         return False
@@ -1471,7 +1433,7 @@ def _worker_descarga(lote_size, db_url):
 
                     for ruta_en_zip in pdfs_oferta:
                         nombre_pdf = os.path.basename(ruta_en_zip)
-                        _descarga_estado["ultimo_mensaje"] = f"{referencia} → {nombre_pdf}"
+                        _descarga_estado["ultimo_mensaje"] = f"{referencia} -> {nombre_pdf}"
                         try:
                             pdf_bytes = zf.read(ruta_en_zip)
                             cur2.execute("""
@@ -1483,9 +1445,9 @@ def _worker_descarga(lote_size, db_url):
                             """, (lid, referencia, descripcion, nombre_pdf,
                                   psycopg2.Binary(pdf_bytes)))
                             pdfs_guardados_esta += 1
-                            print(f"  💾 Guardado: {nombre_pdf}")
+                            print(f"  Guardado: {nombre_pdf}")
                         except Exception as e:
-                            print(f"  ⚠️ Error guardando {nombre_pdf}: {e}")
+                            print(f"  Error guardando {nombre_pdf}: {e}")
                             conn2.rollback()
 
                     conn2.commit()
@@ -1555,6 +1517,7 @@ def descarga_backfill_status():
         return jsonify({"error": "No autorizado"}), 401
     return jsonify(_descarga_estado)
 
+
 @app.route('/organizador-oferta', methods=['POST'])
 def organizador_oferta():
     try:
@@ -1606,10 +1569,10 @@ def organizador_oferta():
             experiencia = analisis_pliego.get('viabilidad', {}).get('experiencia_previa', 'No especificado')
             seccion_pliego = f"""REQUISITOS DEL PLIEGO:
 {req_texto}
-Garantías exigidas: {garantias}
+Garantias exigidas: {garantias}
 Experiencia previa: {experiencia}"""
         else:
-            seccion_pliego = 'ANÁLISIS DEL PLIEGO: No disponible — usar descripción de la licitación como referencia.'
+            seccion_pliego = 'ANALISIS DEL PLIEGO: No disponible — usar descripcion de la licitacion como referencia.'
 
         condiciones = dictamen.get('condiciones', [])
         condiciones_texto = '\n'.join(
@@ -1619,18 +1582,18 @@ Experiencia previa: {experiencia}"""
 
         monto_fmt = f"RD${float(licitacion.get('monto', 0)):,.0f}"
 
-        prompt = f"""Eres el Organizador de Oferta de Compita. Genera un plan de trabajo estructurado para que una empresa licitadora participe en una licitación pública específica de República Dominicana.
+        prompt = f"""Eres el Organizador de Oferta de Compita. Genera un plan de trabajo estructurado para que una empresa licitadora participe en una licitacion publica especifica de Republica Dominicana.
 
-El output será pegado directamente en KanbanBonsai para generar un Bonsai con 5 sprints. Cada hoja (tarea) debe ser concreta, accionable y específica para ESTA licitación — no genérica.
+El output sera pegado directamente en KanbanBonsai para generar un Bonsai con 5 sprints. Cada hoja (tarea) debe ser concreta, accionable y especifica para ESTA licitacion — no generica.
 
-LICITACIÓN:
+LICITACION:
 - Referencia: {referencia}
-- Descripción: {licitacion.get('descripcion', '')}
+- Descripcion: {licitacion.get('descripcion', '')}
 - Entidad: {licitacion.get('entidad', '')}
 - Tipo de proceso: {licitacion.get('tipo', '')}
 - Monto estimado: {monto_fmt}
-- Días disponibles: {licitacion.get('diasDisponibles', '')}
-- Fecha límite: {licitacion.get('fecha_presentacion', 'No especificada')}
+- Dias disponibles: {licitacion.get('diasDisponibles', '')}
+- Fecha limite: {licitacion.get('fecha_presentacion', 'No especificada')}
 
 EMPRESA LICITADORA:
 {empresa_desc}
@@ -1641,39 +1604,39 @@ CONDICIONES A ATENDER:
 
 {seccion_pliego}
 
-Responde ÚNICAMENTE con este formato, sin texto adicional ni explicaciones:
+Responde UNICAMENTE con este formato, sin texto adicional ni explicaciones:
 
-PROYECTO: [nombre del Bonsai, máximo 8 palabras, específico para esta licitación]
-DESCRIPCIÓN: [2 líneas sobre el objetivo de este plan de oferta]
+PROYECTO: [nombre del Bonsai, maximo 8 palabras, especifico para esta licitacion]
+DESCRIPCION: [2 lineas sobre el objetivo de este plan de oferta]
 
-SPRINT 1 — Análisis y Evaluación
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
+SPRINT 1 — Analisis y Evaluacion
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
 
-SPRINT 2 — Documentación Legal
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
+SPRINT 2 — Documentacion Legal
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
 
-SPRINT 3 — Oferta Técnica
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
+SPRINT 3 — Oferta Tecnica
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
 
-SPRINT 4 — Oferta Económica
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
+SPRINT 4 — Oferta Economica
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
 
 SPRINT 5 — Entrega y Seguimiento
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]
-- [tarea específica para esta licitación]"""
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]
+- [tarea especifica para esta licitacion]"""
 
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
@@ -1707,9 +1670,6 @@ SPRINT 5 — Entrega y Seguimiento
         print(f'Error en organizador-oferta: {str(e)}')
         return jsonify({'success': False, 'error': str(e)}), 500
 
-# ══════════════════════════════════════════════════════════════════════════════
-# REPORTE COMPITA
-# ══════════════════════════════════════════════════════════════════════════════
 
 REPORTES_DIR = "/tmp/reportes"
 F033_DIR     = "/tmp/f033"
@@ -1719,14 +1679,15 @@ def verificar_f033_en_cache(referencia):
     try:
         os.makedirs(F033_DIR, exist_ok=True)
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
-        ruta = os.path.join(F033_DIR, f"F033_{nombre_seguro}.docx")
-        if os.path.exists(ruta):
-            edad_dias = (time.time() - os.path.getmtime(ruta)) / 86400
-            if edad_dias <= CACHE_DIAS:
-                return ruta
+        for prefijo in ['F033', 'Ficha_Tecnica']:
+            ruta = os.path.join(F033_DIR, f"{prefijo}_{nombre_seguro}.docx")
+            if os.path.exists(ruta):
+                edad_dias = (time.time() - os.path.getmtime(ruta)) / 86400
+                if edad_dias <= CACHE_DIAS:
+                    return ruta
         return None
     except Exception as e:
-        print(f"Error verificando caché F033: {e}")
+        print(f"Error verificando cache F033: {e}")
         return None
 
 
@@ -1740,7 +1701,7 @@ def generar_f033_y_cachear(referencia):
     try:
         f033_bytes = None
         fichas_prioritarias, fichas_pliego, fichas_secundarias = [], [], []
-        nombre_ficha_encontrada = None                          # <── NUEVO
+        nombre_ficha_encontrada = None
 
         with zipfile.ZipFile(zip_path, 'r') as zf:
             archivos = zf.namelist()
@@ -1756,21 +1717,20 @@ def generar_f033_y_cachear(referencia):
                 if archivo.lower().endswith('.pdf'):
                     if any(k in nombre for k in ['ficha', 'tecnica']):
                         fichas_prioritarias.append(zf.read(archivo))
-                        if not nombre_ficha_encontrada:         # <── NUEVO
-                            nombre_ficha_encontrada = os.path.basename(archivo)  # <── NUEVO
+                        if not nombre_ficha_encontrada:
+                            nombre_ficha_encontrada = os.path.basename(archivo)
                     elif any(k in nombre for k in ['pliego', 'condiciones', 'terminos']):
                         fichas_pliego.append(zf.read(archivo))
                     elif any(k in nombre for k in ['listado', 'especificacion']):
                         fichas_secundarias.append(zf.read(archivo))
 
-        # Fallback: ficha tecnica si no hay F033                # <── NUEVO
-        usar_ficha_fallback = False                             # <── NUEVO
-        if not f033_bytes:                                      # <── NUEVO
-            if fichas_prioritarias:                             # <── NUEVO
-                usar_ficha_fallback = True                      # <── NUEVO
-                print(f"  generar_f033_y_cachear: F033 no encontrado, usando ficha tecnica")  # <── NUEVO
+        usar_ficha_fallback = False
+        if not f033_bytes:
+            if fichas_prioritarias:
+                usar_ficha_fallback = True
+                print(f"  generar_f033_y_cachear: F033 no encontrado, usando ficha tecnica")
             else:
-                return None, "F033 (.docx) no encontrado y no hay ficha tecnica disponible"  # <── MODIFICADO
+                return None, "F033 (.docx) no encontrado y no hay ficha tecnica disponible"
 
         candidatos = []
         if fichas_pliego:       candidatos.append(fichas_pliego)
@@ -1788,19 +1748,18 @@ def generar_f033_y_cachear(referencia):
         if not items:
             return None, "No se extrajeron items del ZIP"
 
-            # Generar Word segun disponibilidad                     # <── NUEVO
-        if usar_ficha_fallback:                                 # <── NUEVO
-            docx_bytes = generar_oferta_desde_ficha(           # <── NUEVO
-                items,                                          # <── NUEVO
-                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"  # <── NUEVO
-            )                                                   # <── NUEVO
-            prefijo = "Ficha_Tecnica"                           # <── MODIFICADO
+        if usar_ficha_fallback:
+            docx_bytes = generar_oferta_desde_ficha(
+                items,
+                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"
+            )
+            prefijo = "Ficha_Tecnica"
         else:
             docx_bytes = llenar_f033(f033_bytes, items)
             prefijo = "F033"
 
         os.makedirs(F033_DIR, exist_ok=True)
-        ruta = os.path.join(F033_DIR, f"{prefijo}_{nombre_seguro}.docx")  # <── MODIFICADO
+        ruta = os.path.join(F033_DIR, f"{prefijo}_{nombre_seguro}.docx")
         with open(ruta, 'wb') as f:
             f.write(docx_bytes)
 
@@ -1811,26 +1770,27 @@ def generar_f033_y_cachear(referencia):
         print(f"Error generando formulario: {e}")
         return None, str(e)
 
+
 def mapear_catalogo_con_claude(empresa_desc, requisitos, api_key):
     if not empresa_desc or not requisitos:
         return None
-    prompt = f"""Analiza si esta empresa puede suplir los requisitos de una licitación pública.
+    prompt = f"""Analiza si esta empresa puede suplir los requisitos de una licitacion publica.
 
 EMPRESA:
 {empresa_desc}
 
-REQUISITOS DE LA LICITACIÓN:
+REQUISITOS DE LA LICITACION:
 {chr(10).join(f'- {r}' for r in requisitos[:10])}
 
-Responde ÚNICAMENTE con JSON válido, sin texto adicional:
+Responde UNICAMENTE con JSON valido, sin texto adicional:
 {{
-  "compatibles": ["ítem que la empresa puede suplir directamente"],
-  "requieren_proveedor": ["ítem que necesita proveedor externo"],
+  "compatibles": ["item que la empresa puede suplir directamente"],
+  "requieren_proveedor": ["item que necesita proveedor externo"],
   "sin_informacion_suficiente": false
 }}
 
-REGLA: Si la descripción de la empresa no tiene suficiente detalle,
-pon sin_informacion_suficiente: true y listas vacías. No inventes."""
+REGLA: Si la descripcion de la empresa no tiene suficiente detalle,
+pon sin_informacion_suficiente: true y listas vacias. No inventes."""
     try:
         resp = requests.post(
             'https://api.anthropic.com/v1/messages',
@@ -1856,7 +1816,7 @@ pon sin_informacion_suficiente: true y listas vacías. No inventes."""
             return None
         return json.loads(texto[inicio:fin+1])
     except Exception as e:
-        print(f'Error en mapeo catálogo: {e}')
+        print(f'Error en mapeo catalogo: {e}')
         return None
 
 
@@ -1890,9 +1850,9 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
                 fecha_venc = fecha_venc.date()
             diff = (fecha_venc - hoy).days
             if diff < 0:
-                vencidos.append(f"{nombre} (venció hace {abs(diff)} días)")
+                vencidos.append(f"{nombre} (vencio hace {abs(diff)} dias)")
             elif diff <= 30:
-                por_vencer.append(f"{nombre} (vence en {diff} días)")
+                por_vencer.append(f"{nombre} (vence en {diff} dias)")
             else:
                 vigentes.append(nombre)
         return {
@@ -1909,9 +1869,7 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
 
 
 def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key, monto=0):
-    """Ejecuta analisis de pliego sobre un PDF ya descargado. Soporta PDFs de imagen via base64."""
     try:
-        # ── Intentar extraccion de texto ─────────────────────────────────────
         es_pdf_imagen = False
         texto_completo = ""
         try:
@@ -2041,50 +1999,50 @@ def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, emp
             monto_fmt = f"RD${float(monto_val):,.0f}"
         except Exception:
             monto_fmt = str(monto_val)
-        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitación.
+        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitacion.
 
-LICITACIÓN: {referencia} — {licitacion.get('descripcion', '')}
+LICITACION: {referencia} — {licitacion.get('descripcion', '')}
 ENTIDAD: {licitacion.get('entidad', '')}
-TIPO: {licitacion.get('tipo', '')} · MONTO: {monto_fmt} · DÍAS: {licitacion.get('diasDisponibles', '')}
+TIPO: {licitacion.get('tipo', '')} · MONTO: {monto_fmt} · DIAS: {licitacion.get('diasDisponibles', '')}
 EMPRESA: {empresa_desc}
 COACH: {dictamen.get('veredicto', '')}
 {condiciones_texto}
 REQUISITOS: {req_texto}
-GARANTÍAS: {garantias}
+GARANTIAS: {garantias}
 
-Responde ÚNICAMENTE con este formato:
+Responde UNICAMENTE con este formato:
 
-PROYECTO: [nombre específico, máximo 8 palabras]
-DESCRIPCIÓN: [2 líneas sobre el objetivo]
+PROYECTO: [nombre especifico, maximo 8 palabras]
+DESCRIPCION: [2 lineas sobre el objetivo]
 
-SPRINT 1 — Análisis y Evaluación
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
+SPRINT 1 — Analisis y Evaluacion
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
 
-SPRINT 2 — Documentación Legal
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
+SPRINT 2 — Documentacion Legal
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
 
-SPRINT 3 — Oferta Técnica
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
+SPRINT 3 — Oferta Tecnica
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
 
-SPRINT 4 — Oferta Económica
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]
+SPRINT 4 — Oferta Economica
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]
 
 SPRINT 5 — Entrega y Seguimiento
-- [tarea específica]
-- [tarea específica]
-- [tarea específica]"""
+- [tarea especifica]
+- [tarea especifica]
+- [tarea especifica]"""
         resp = requests.post(
             'https://api.anthropic.com/v1/messages',
             headers={
@@ -2163,11 +2121,11 @@ def generar_html_reporte(referencia, datos):
 
     t1 = []
     if analisis and analisis.get('sintesis'):
-        t1.append(t_claude(f'Análisis del pliego {referencia} completo', 'sintesis'))
+        t1.append(t_claude(f'Analisis del pliego {referencia} completo', 'sintesis'))
         total_claude += 1
     else:
         if pliego_url:
-            t1.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">Pliego no analizado — <a href="{pliego_url}" download style="background:#EAF3DE;color:#3B6D11;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">⬇ Descargar pliego</a></span></div>')
+            t1.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">Pliego no analizado — <a href="{pliego_url}" download style="background:#EAF3DE;color:#3B6D11;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">Descargar pliego</a></span></div>')
         else:
             t1.append(t_human('Analizar pliego desde Compita — requerido para continuar'))
         total_human += 1
@@ -2176,19 +2134,19 @@ def generar_html_reporte(referencia, datos):
         nc  = len(mapeo.get('compatibles', []))
         npr = len(mapeo.get('requieren_proveedor', []))
         if mapeo.get('sin_informacion_suficiente'):
-            t1.append(t_human('Mapeo catálogo vs. ítems — completar descripción de empresa en Compita'))
+            t1.append(t_human('Mapeo catalogo vs. items — completar descripcion de empresa en Compita'))
             total_human += 1
         else:
-            t1.append(t_claude(f'Mapeo catálogo: {nc} compatibles, {npr} por confirmar', 'mapeo', 'ver tabla'))
+            t1.append(t_claude(f'Mapeo catalogo: {nc} compatibles, {npr} por confirmar', 'mapeo', 'ver tabla'))
             total_claude += 1
     else:
-        t1.append(t_human('Mapeo catálogo vs. ítems — requiere análisis del pliego'))
+        t1.append(t_human('Mapeo catalogo vs. items — requiere analisis del pliego'))
         total_human += 1
 
-    t1.append(t_human('Confirmar disponibilidad de ítems con proveedor externo'))
-    t1.append(t_human('Validar fortaleza de candidatura y decidir participación'))
+    t1.append(t_human('Confirmar disponibilidad de items con proveedor externo'))
+    t1.append(t_human('Validar fortaleza de candidatura y decidir participacion'))
     total_human += 2
-    s1 = sprint_sec('1', 'Análisis y Evaluación', t1)
+    s1 = sprint_sec('1', 'Analisis y Evaluacion', t1)
 
     t2 = []
     if perfil:
@@ -2208,9 +2166,9 @@ def generar_html_reporte(referencia, datos):
         certs = analisis['certificaciones_iso']
         if certs.get('exige_iso') == 'SI':
             lista_c = ', '.join(certs.get('listado', [])) or 'ver detalle'
-            t2.append(t_claude(f'Certificaciones exigidas: {lista_c}', 'certs', 'ver análisis'))
+            t2.append(t_claude(f'Certificaciones exigidas: {lista_c}', 'certs', 'ver analisis'))
         else:
-            t2.append(t_claude('Certificaciones exigidas: ninguna ISO requerida', 'certs', 'ver análisis'))
+            t2.append(t_claude('Certificaciones exigidas: ninguna ISO requerida', 'certs', 'ver analisis'))
         total_claude += 1
     else:
         t2.append(t_human('Verificar certificaciones exigidas en el pliego'))
@@ -2224,63 +2182,64 @@ def generar_html_reporte(referencia, datos):
         total_human += 1
 
     garantias_txt = (analisis or {}).get('viabilidad', {}).get('garantias', '')
-    t2.append(t_human(f'Tramitar garantía: {garantias_txt[:70]}' if garantias_txt else 'Tramitar garantía de seriedad'))
+    t2.append(t_human(f'Tramitar garantia: {garantias_txt[:70]}' if garantias_txt else 'Tramitar garantia de seriedad'))
     t2.append(t_human('Compilar y verificar expediente legal completo'))
     total_human += 2
     for form in [f for f in formularios_adicionales if f.get('sprint') == 2]:
         t2.append(t_human(f"Completar {form['nombre']}"))
         total_human += 1
-    s2 = sprint_sec('2', 'Documentación Legal', t2)
+    s2 = sprint_sec('2', 'Documentacion Legal', t2)
 
     t3 = []
     if analisis and analisis.get('requisitos'):
-        t3.append(t_claude(f'{len(analisis["requisitos"])} especificaciones técnicas extraídas y cruzadas', 'checklist', 'ver tabla'))
+        t3.append(t_claude(f'{len(analisis["requisitos"])} especificaciones tecnicas extraidas y cruzadas', 'checklist', 'ver tabla'))
         total_claude += 1
     else:
-        t3.append(t_human('Extraer especificaciones técnicas del pliego'))
+        t3.append(t_human('Extraer especificaciones tecnicas del pliego'))
         total_human += 1
 
-    t3.append(t_human('Confirmar cumplimiento técnico producto a producto'))
-    t3.append(t_human('Reunir fichas técnicas de fabricantes para ítems requeridos'))
-    t3.append(t_human('Preparar y aprobar propuesta técnica'))
+    t3.append(t_human('Confirmar cumplimiento tecnico producto a producto'))
+    t3.append(t_human('Reunir fichas tecnicas de fabricantes para items requeridos'))
+    t3.append(t_human('Preparar y aprobar propuesta tecnica'))
     total_human += 3
     for form in [f for f in formularios_adicionales if f.get('sprint') == 3]:
         t3.append(t_human(f"Completar {form['nombre']}"))
         total_human += 1
-    s3 = sprint_sec('3', 'Oferta Técnica', t3)
+    s3 = sprint_sec('3', 'Oferta Tecnica', t3)
 
-    tiene_f033 = datos.get('tiene_f033')  # None=no verificado, True=existe, False=no existe
+    tiene_f033 = datos.get('tiene_f033')
     t4 = []
     if f033_url:
-        t4.append(f'<div class="task"><span class="dot green"></span><span class="task-txt">F033 pre-llenado generado por Agente 033 — <a href="{f033_url}" target="_blank" style="background:#3B6D11;color:#fff;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">⬇ Descargar</a></span></div>')
+        label_f033 = 'F033 pre-llenado' if 'F033_' in (f033_url or '') else 'Formulario de oferta (desde ficha tecnica)'
+        t4.append(f'<div class="task"><span class="dot green"></span><span class="task-txt">{label_f033} generado por Agente 033 — <a href="{f033_url}" target="_blank" style="background:#3B6D11;color:#fff;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">Descargar</a></span></div>')
         total_claude += 1
     elif tiene_f033 is False:
-        t4.append(t_human('Oferta económica manual — esta licitación no incluye formulario F033'))
+        t4.append(t_human('Oferta economica manual — esta licitacion no incluye formulario F033'))
         total_human += 1
     else:
-        btn_f033 = f'<button onclick="generarF033Reporte(this)" style="display:inline-block;padding:2px 9px;background:#BA7517;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px;vertical-align:middle;">Generar F033 →</button>'
-        t4.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">F033 pre-llenado{btn_f033}</span></div>')
+        btn_f033 = f'<button onclick="generarF033Reporte(this)" style="display:inline-block;padding:2px 9px;background:#BA7517;color:#fff;border:none;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;margin-left:6px;vertical-align:middle;">Generar formulario</button>'
+        t4.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">Formulario de oferta pre-llenado{btn_f033}</span></div>')
         total_human += 1
 
     if precios:
         prom_global = sum(p.get('precio_promedio') or 0 for p in precios[:3]) / min(len(precios), 3)
-        t4.append(t_claude(f'Precios históricos de referencia — promedio RD${prom_global:,.0f}', 'precios', 'ver tabla'))
+        t4.append(t_claude(f'Precios historicos de referencia — promedio RD${prom_global:,.0f}', 'precios', 'ver tabla'))
         total_claude += 1
     else:
-        t4.append(t_human('Sin precios históricos en Compita — definir precios desde cero'))
+        t4.append(t_human('Sin precios historicos en Compita — definir precios desde cero'))
         total_human += 1
 
     if analisis and analisis.get('viabilidad'):
-        t4.append(t_claude('Política de ITBIS del pliego identificada'))
+        t4.append(t_claude('Politica de ITBIS del pliego identificada'))
         total_claude += 1
     else:
-        t4.append(t_human('Identificar política de ITBIS en el pliego'))
+        t4.append(t_human('Identificar politica de ITBIS en el pliego'))
         total_human += 1
 
-    t4.append(t_human('Definir precios finales ítem por ítem en el F033'))
+    t4.append(t_human('Definir precios finales item por item en el formulario'))
     t4.append(t_human('Aprobar monto total y margen antes de presentar'))
     total_human += 2
-    s4 = sprint_sec('4', 'Oferta Económica', t4)
+    s4 = sprint_sec('4', 'Oferta Economica', t4)
 
     t5 = []
     if analisis and analisis.get('requisitos'):
@@ -2301,7 +2260,7 @@ def generar_html_reporte(referencia, datos):
 
     t5.append(t_human('Firmar y autenticar documentos requeridos'))
     t5.append(t_human(f'Ensamblar y entregar expediente antes del {fecha_show}'))
-    t5.append(t_human('Obtener constancia de recepción'))
+    t5.append(t_human('Obtener constancia de recepcion'))
     total_human += 3
     s5 = sprint_sec('5', 'Entrega y Seguimiento', t5)
 
@@ -2313,7 +2272,7 @@ def generar_html_reporte(referencia, datos):
         grid_eval  = ''
         if opcs_li or riesgos_li:
             grid_eval = f"<div class='grid2'><div class='card-green'><strong>Oportunidades</strong><ul class='ul-items'>{opcs_li}</ul></div><div class='card-amber'><strong>Riesgos</strong><ul class='ul-items'>{riesgos_li}</ul></div></div>"
-        det += f'<div class="sec" id="sintesis"><div class="sec-hdr"><span class="sec-ttl">Síntesis del pliego</span><span class="bdg-ok">Claude</span></div><p class="sec-txt">{analisis["sintesis"]}</p>{grid_eval}</div>'
+        det += f'<div class="sec" id="sintesis"><div class="sec-hdr"><span class="sec-ttl">Sintesis del pliego</span><span class="bdg-ok">Claude</span></div><p class="sec-txt">{analisis["sintesis"]}</p>{grid_eval}</div>'
 
     if mapeo and not mapeo.get('sin_informacion_suficiente'):
         compat = mapeo.get('compatibles', [])
@@ -2322,7 +2281,7 @@ def generar_html_reporte(referencia, datos):
         li_p   = ''.join(f'<li>{i}</li>' for i in prov)
         card_p = f'<div class="card-amber"><strong>{len(prov)} por confirmar con proveedor</strong><ul class="ul-items">{li_p}</ul></div>' if prov else ''
         det += f'''<div class="sec" id="mapeo">
-  <div class="sec-hdr"><span class="sec-ttl">Mapeo catálogo vs. ítems requeridos</span><span class="bdg-ok">Claude</span></div>
+  <div class="sec-hdr"><span class="sec-ttl">Mapeo catalogo vs. items requeridos</span><span class="bdg-ok">Claude</span></div>
   <div class="grid2">
     <div class="card-green"><strong>{len(compat)} compatibles</strong><ul class="ul-items">{li_c}</ul></div>
     {card_p}
@@ -2355,13 +2314,13 @@ def generar_html_reporte(referencia, datos):
             if prom:
                 filas_pr += f'<tr><td>{desc}</td><td>{prom:,.2f} {mon}</td><td>{pmin:,.2f}–{pmax:,.2f}</td><td>{refs}</td></tr>'
         det += f'''<div class="sec" id="precios">
-  <div class="sec-hdr"><span class="sec-ttl">Precios históricos de referencia</span><span class="bdg-ok">Claude</span></div>
+  <div class="sec-hdr"><span class="sec-ttl">Precios historicos de referencia</span><span class="bdg-ok">Claude</span></div>
   <p class="sec-txt muted" style="padding-bottom:0;">Licitaciones adjudicadas en Compita. Solo referencia — no son precios finales.</p>
-  <table class="tbl"><thead><tr><th>Descripción</th><th>Promedio</th><th>Rango</th><th>Refs.</th></tr></thead><tbody>{filas_pr}</tbody></table>
+  <table class="tbl"><thead><tr><th>Descripcion</th><th>Promedio</th><th>Rango</th><th>Refs.</th></tr></thead><tbody>{filas_pr}</tbody></table>
 </div>'''
 
     if analisis and analisis.get('requisitos'):
-        items_li = ''.join(f'<li>☐ {r}</li>' for r in analisis['requisitos'][:10])
+        items_li = ''.join(f'<li>{r}</li>' for r in analisis['requisitos'][:10])
         det += f'<div class="sec" id="checklist"><div class="sec-hdr"><span class="sec-ttl">Checklist de requisitos del pliego</span><span class="bdg-ok">Claude</span></div><ul class="checklist">{items_li}</ul></div>'
 
     if analisis and analisis.get('certificaciones_iso'):
@@ -2381,9 +2340,9 @@ def generar_html_reporte(referencia, datos):
         tiempos = analisis['tiempos']
         filas_t = ''
         if tiempos.get('fecha_limite_oferta'):
-            filas_t += f'<tr><td>Fecha límite de oferta</td><td><strong>{tiempos["fecha_limite_oferta"]}</strong></td></tr>'
+            filas_t += f'<tr><td>Fecha limite de oferta</td><td><strong>{tiempos["fecha_limite_oferta"]}</strong></td></tr>'
         if tiempos.get('dias_calendario_restantes'):
-            filas_t += f'<tr><td>Días restantes</td><td>{tiempos["dias_calendario_restantes"]}</td></tr>'
+            filas_t += f'<tr><td>Dias restantes</td><td>{tiempos["dias_calendario_restantes"]}</td></tr>'
         alerta = tiempos.get('alerta', '')
         color_alerta = {'HOLGADO': '#3B6D11', 'AJUSTADO': '#92400E', 'MUY AJUSTADO': '#DC2626'}.get(alerta, '#6B7280')
         if alerta:
@@ -2431,8 +2390,6 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 .dot.amber{{background:#BA7517}}
 .task-txt{{font-size:13px;color:#374151;line-height:1.5}}
 .task-txt a{{text-decoration:none;margin-left:6px;vertical-align:middle;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;}}
-.btn-ev{{background:#EAF3DE;color:#3B6D11;}}
-.btn-dl{{background:#3B6D11;color:#fff;}}
 .sec-txt{{padding:11px 14px;font-size:13px;color:#374151;line-height:1.6}}
 .muted{{color:#9CA3AF!important;font-style:italic}}
 .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:11px 14px}}
@@ -2469,12 +2426,12 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
       <div class="hdr-sub">{licitacion.get("entidad","")[:60]} · {licitacion.get("descripcion","")[:50]} · {monto_fmt}</div>
     </div>
     <div class="hdr-btns">
-      <a href="javascript:window.print()" class="btn-hdr">⬇ PDF</a>
+      <a href="javascript:window.print()" class="btn-hdr">PDF</a>
     </div>
   </div>
   <div class="stats">
     <div class="stat"><div class="stat-l">Veredicto Coach</div><div class="stat-v" style="color:{color_v};">{label_v}</div></div>
-    <div class="stat"><div class="stat-l">Días disponibles</div><div class="stat-v">{licitacion.get("diasDisponibles","—")}</div></div>
+    <div class="stat"><div class="stat-l">Dias disponibles</div><div class="stat-v">{licitacion.get("diasDisponibles","—")}</div></div>
     <div class="stat"><div class="stat-l">Tareas Claude</div><div class="stat-v">{total_claude} listas</div></div>
     <div class="stat"><div class="stat-l">Tareas humanas</div><div class="stat-v amber">{total_human} por hacer</div></div>
   </div>
@@ -2499,7 +2456,7 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
     <div class="footer-t">Listo para trabajar en KanbanBonsai</div>
     <div class="footer-s">{total_human} tareas humanas distribuidas en 5 sprints</div>
   </div>
-  <button class="btn-kb" onclick="abrirKanban()">Abrir en KanbanBonsai →</button>
+  <button class="btn-kb" onclick="abrirKanban()">Abrir en KanbanBonsai</button>
 </div>
 
 <div class="meta">Generado por Claude · Compita · {fecha_generado}</div>
@@ -2512,7 +2469,7 @@ function abrirKanban(){{
     var toast = document.createElement('div');
     toast.id = 'kb-toast';
     toast.style.cssText = 'position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:14px 22px;border-radius:10px;font-size:13px;line-height:1.6;max-width:380px;text-align:center;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
-    toast.innerHTML = '✅ Plan copiado al portapapeles<br><span style="color:#9CA3AF;font-size:12px;">En KanbanBonsai haz clic en <strong style="color:#fff;">Generar con IA</strong> y pega con <strong style="color:#fff;">Ctrl+V</strong></span><br><span style="color:#6B7280;font-size:11px;margin-top:4px;display:block;">Este aviso desaparece en 60 segundos</span>';
+    toast.innerHTML = 'Plan copiado al portapapeles<br><span style="color:#9CA3AF;font-size:12px;">En KanbanBonsai haz clic en <strong style="color:#fff;">Generar con IA</strong> y pega con <strong style="color:#fff;">Ctrl+V</strong></span><br><span style="color:#6B7280;font-size:11px;margin-top:4px;display:block;">Este aviso desaparece en 60 segundos</span>';
     document.body.appendChild(toast);
     setTimeout(function(){{ window.open('https://kanban.umbusk.com/bonsais','_blank'); }}, 2000);
     setTimeout(function(){{ var t = document.getElementById('kb-toast'); if(t) t.remove(); }}, 60000);
@@ -2532,9 +2489,9 @@ async function generarF033Reporte(btn){{
     if(!resp.ok) {{
       var msg = 'Error ' + resp.status;
       if(resp.status === 504) {{
-        msg = 'ZIP muy grande o servidor lento. Descárgalo manualmente desde el portal SECP.';
+        msg = 'ZIP muy grande o servidor lento. Descargalo manualmente desde el portal SECP.';
       }} else if(resp.status === 404) {{
-        msg = 'No se encontró el F033 (puede ser Comparación de Precios sin formulario).';
+        msg = 'No se encontro formulario (puede ser Comparacion de Precios sin formulario).';
       }} else if(resp.status === 500) {{
         try {{ var errData = await resp.json(); msg = errData.error || msg; }} catch(ex) {{}}
       }}
@@ -2544,14 +2501,14 @@ async function generarF033Reporte(btn){{
     var url  = URL.createObjectURL(blob);
     var a    = document.createElement('a');
     a.href   = url;
-    a.download = 'F033_{nombre_seguro}.docx';
+    a.download = 'Formulario_{nombre_seguro}.docx';
     a.click();
-    btn.textContent = '✓ Descargado';
+    btn.textContent = 'Descargado';
     btn.style.background = '#3B6D11';
     btn.style.color = '#fff';
   }} catch(e){{
     btn.style.background = '#DC2626';
-    btn.textContent = '✗ ' + e.message.substring(0, 60);
+    btn.textContent = 'Error: ' + e.message.substring(0, 60);
     setTimeout(function(){{
       btn.textContent = 'Reintentar';
       btn.style.background = '#BA7517';
@@ -2587,7 +2544,6 @@ def generar_reporte():
 
         force = data.get('force', False)
 
-        # Si no hay analisis en Neon, forzar regeneracion aunque haya cache
         analisis_en_neon = False
         if db_url and empresa_id:
             try:
@@ -2607,7 +2563,6 @@ def generar_reporte():
             force = True
             print("PASO 0: Sin analisis en Neon — forzando regeneracion del reporte")
 
-        # Si force=True, borrar analisis cacheado en Neon para re-ejecutarlo con el codigo actual
         if force and db_url and empresa_id:
             try:
                 conn = psycopg2.connect(db_url)
@@ -2630,10 +2585,10 @@ def generar_reporte():
             if edad_dias <= CACHE_DIAS:
                 dominio = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
                 url = f"https://{dominio}/reporte/{nombre_seguro}"
-                print(f"Reporte en caché: {url}")
+                print(f"Reporte en cache: {url}")
                 return jsonify({'success': True, 'url': url, 'cached': True})
 
-        print(f"\n══ PIPELINE REPORTE COMPITA: {referencia} ══")
+        print(f"\n== PIPELINE REPORTE COMPITA: {referencia} ==")
 
         zip_path  = f"{TEMP_DIR}/{nombre_seguro}.zip"
         zip_ok    = os.path.exists(zip_path) and (time.time() - os.path.getmtime(zip_path)) / 86400 <= CACHE_DIAS
@@ -2656,15 +2611,14 @@ def generar_reporte():
         else:
             print(f"PASO 1: ZIP en cache OK | PDF en cache: {pdf_cache is not None}")
 
-        # ── PASO 1.5: Detectar formularios y F033 en el ZIP ──────────────────
         formularios_adicionales = []
-        tiene_f033 = None  # None = ZIP no disponible para verificar
+        tiene_f033 = None
         if zip_ok:
             try:
                 FORMAS_CONOCIDAS = [
-                    ({'034', 'presentofer', 'presentacion_de_oferta'}, 'F034', 'Formulario F034 — Presentación de Oferta', 2),
-                    ({'042', 'informacion_oferente', 'informacion del oferente'}, 'F042', 'Formulario F042 — Información del Oferente', 2),
-                    ({'etico', 'integridad', 'diligencia', 'compromiso'}, 'ETICO', 'Compromiso ético de proveedores', 2),
+                    ({'034', 'presentofer', 'presentacion_de_oferta'}, 'F034', 'Formulario F034 — Presentacion de Oferta', 2),
+                    ({'042', 'informacion_oferente', 'informacion del oferente'}, 'F042', 'Formulario F042 — Informacion del Oferente', 2),
+                    ({'etico', 'integridad', 'diligencia', 'compromiso'}, 'ETICO', 'Compromiso etico de proveedores', 2),
                     ({'056', 'muestra', 'entrega_de_muestra'}, 'F056', 'Formulario F056 — Entrega de Muestras', 3),
                 ]
                 vistos = set()
@@ -2717,7 +2671,7 @@ def generar_reporte():
                 print(f'Error leyendo analisis_pliegos: {e}')
 
         if not analisis_pliego and pdf_cache:
-            print("PASO 3: Análisis del pliego no encontrado — ejecutando desde PDF...")
+            print("PASO 3: Analisis del pliego no encontrado — ejecutando desde PDF...")
             titulo_lic = licitacion.get('descripcion', '')
             analisis_pliego = analizar_pliego_desde_cache(
                 pdf_cache, referencia, titulo_lic, empresa_desc, api_key,
@@ -2736,26 +2690,26 @@ def generar_reporte():
                     conn.commit()
                     cur.close()
                     conn.close()
-                    print("  Análisis guardado en Neon")
+                    print("  Analisis guardado en Neon")
                 except Exception as e:
-                    print(f'  Error guardando análisis: {e}')
+                    print(f'  Error guardando analisis: {e}')
         elif not analisis_pliego:
-            print("PASO 3: Sin PDF en caché — análisis no disponible")
+            print("PASO 3: Sin PDF en cache — analisis no disponible")
         else:
-            print("PASO 3: Análisis del pliego en Neon ✓")
+            print("PASO 3: Analisis del pliego en Neon OK")
 
         f033_ruta = verificar_f033_en_cache(referencia)
         if not f033_ruta and zip_ok:
-            print("PASO 4: Generando F033 desde ZIP...")
+            print("PASO 4: Generando formulario desde ZIP...")
             f033_ruta, f033_error = generar_f033_y_cachear(referencia)
             if f033_ruta:
-                print(f"  F033 generado ✓")
+                print(f"  Formulario generado OK")
             else:
-                print(f"  F033 no generado: {f033_error}")
+                print(f"  Formulario no generado: {f033_error}")
         elif f033_ruta:
-            print("PASO 4: F033 en caché ✓")
+            print("PASO 4: Formulario en cache OK")
         else:
-            print("PASO 4: F033 no disponible (sin ZIP)")
+            print("PASO 4: Formulario no disponible (sin ZIP)")
 
         dominio  = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
         f033_url = f"https://{dominio}/f033/{nombre_seguro}" if f033_ruta else None
@@ -2763,7 +2717,7 @@ def generar_reporte():
         print("PASO 5: Consultando Perfil Licitador...")
         perfil = obtener_estado_perfil_licitador(empresa_id, db_url)
 
-        print("PASO 6: Buscando precios históricos...")
+        print("PASO 6: Buscando precios historicos...")
         titulo_lic = licitacion.get('descripcion', '')
         precios = buscar_precios_referencia(titulo_lic, titulo_lic)
         print(f"  {len(precios)} precios encontrados")
@@ -2771,7 +2725,7 @@ def generar_reporte():
         mapeo     = None
         requisitos = (analisis_pliego or {}).get('requisitos', [])
         if empresa_desc and requisitos:
-            print("PASO 7: Mapeando catálogo vs. pliego...")
+            print("PASO 7: Mapeando catalogo vs. pliego...")
             mapeo = mapear_catalogo_con_claude(empresa_desc, requisitos, api_key)
 
         print("PASO 8: Generando prompt KanbanBonsai...")
@@ -2780,7 +2734,6 @@ def generar_reporte():
         )
 
         print("PASO 9: Generando HTML del Reporte...")
-        dominio  = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
         pliego_url = f"https://{dominio}/pliego/{nombre_seguro}" if pdf_cache else None
 
         datos = {
@@ -2802,7 +2755,7 @@ def generar_reporte():
             f.write(html)
 
         url = f"https://{dominio}/reporte/{nombre_seguro}"
-        print(f"══ Reporte listo: {url} ══\n")
+        print(f"== Reporte listo: {url} ==\n")
         return jsonify({'success': True, 'url': url, 'cached': False})
 
     except Exception as e:
@@ -2825,21 +2778,22 @@ def servir_pliego(nombre_seguro):
                 )
     except Exception:
         pass
-    return "Pliego no encontrado en caché. Descárgalo desde Compita.", 404
+    return "Pliego no encontrado en cache. Descargalo desde Compita.", 404
 
 
 @app.route('/f033/<nombre_seguro>', methods=['GET'])
 def servir_f033(nombre_seguro):
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', nombre_seguro)
-    ruta = os.path.join(F033_DIR, f"F033_{nombre_seguro}.docx")
-    if not os.path.exists(ruta):
-        return "F033 no encontrado. Genéralo desde el Reporte Compita.", 404
-    return send_file(
-        ruta,
-        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        as_attachment=True,
-        download_name=f"F033_{nombre_seguro}.docx"
-    )
+    for prefijo in ['F033', 'Ficha_Tecnica']:
+        ruta = os.path.join(F033_DIR, f"{prefijo}_{nombre_seguro}.docx")
+        if os.path.exists(ruta):
+            return send_file(
+                ruta,
+                mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                as_attachment=True,
+                download_name=f"{prefijo}_{nombre_seguro}.docx"
+            )
+    return "Formulario no encontrado. Generalo desde el Reporte Compita.", 404
 
 
 @app.route('/reporte/<nombre_seguro>', methods=['GET'])
@@ -2847,8 +2801,9 @@ def servir_reporte(nombre_seguro):
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', nombre_seguro)
     ruta = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
     if not os.path.exists(ruta):
-        return "Reporte no encontrado. Genéralo desde Compita.", 404
+        return "Reporte no encontrado. Generalo desde Compita.", 404
     return send_file(ruta, mimetype='text/html')
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
