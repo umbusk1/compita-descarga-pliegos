@@ -1231,126 +1231,128 @@ def agente_033():
         fichas_secundarias = []
 
         try:
-            zf_handle = zipfile.ZipFile(zip_path, 'r')
-        except zipfile.BadZipFile:
-            return jsonify({
-                "error": "El archivo descargado del SECP esta corrupto o incompleto. Intenta de nuevo."
-            }), 500
-        except Exception as e:
-            return jsonify({
-                "error": f"No se pudo abrir el archivo ZIP: {str(e)}"
-            }), 500
-
-        with zf_handle as zf:
-            archivos = zf.namelist()
-
-            if not archivos:
-                return jsonify({"error": "El ZIP descargado esta vacio."}), 500
-
-            tiene_adjuntos = any('1_Publicaciones/Adjuntos/' in a for a in archivos)
-            if not tiene_adjuntos:
-                return jsonify({
-                    "error": "El ZIP no contiene la carpeta 1_Publicaciones/Adjuntos/. La estructura del expediente es diferente a la esperada."
-                }), 500
-                
-nombre_ficha_encontrada = None
-            for archivo in archivos:
-                if '1_Publicaciones/Adjuntos/' not in archivo:
-                    continue
-                nombre = os.path.basename(archivo).lower()
-                if archivo.lower().endswith(('.docx', '.doc')):
-                    if '033' in nombre:
-                        f033_bytes = zf.read(archivo)
-                        print(f"  F033 encontrado: {os.path.basename(archivo)}")
-                if archivo.lower().endswith('.pdf'):
-                    es_ficha = any(k in nombre for k in ['ficha', 'tecnica'])
-                    es_pliego = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
-                    es_listado = any(k in nombre for k in ['listado', 'especificacion'])
-                    if es_ficha:
-                        fichas_prioritarias.append(zf.read(archivo))
-                        if not nombre_ficha_encontrada:
-                            nombre_ficha_encontrada = os.path.basename(archivo)
-                        print(f"  Ficha tecnica: {os.path.basename(archivo)}")
-                    elif es_pliego:
-                        fichas_pliego.append(zf.read(archivo))
-                        print(f"  Pliego: {os.path.basename(archivo)}")
-                    elif es_listado:
-                        fichas_secundarias.append(zf.read(archivo))
-                        print(f"  Listado: {os.path.basename(archivo)}")
-
-        if not f033_bytes:
-            try:
-                with zipfile.ZipFile(zip_path, 'r') as zf_retry:
-                    for nombre_doc, doc_bytes in extraer_docx_de_adjuntos(zf_retry):
-                        if '033' in nombre_doc:
-                            f033_bytes = doc_bytes
-                            print(f"  F033 encontrado en ZIP anidado: {nombre_doc}")
-                            break
-            except Exception as e:
-                print(f"  Error buscando F033 en ZIP anidado: {e}")
-
-        usar_ficha_fallback = False
-        if not f033_bytes:
-            if fichas_prioritarias:
-                usar_ficha_fallback = True
-                print(f"  F033 no encontrado — usando ficha tecnica como fallback")
-            else:
-                return jsonify({
-                    "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
-                }), 404
-
-        candidatos = []
-        if fichas_pliego:
-            candidatos.append(('pliego', fichas_pliego))
-        if fichas_prioritarias:
-            candidatos.append(('ficha tecnica', fichas_prioritarias))
-        if fichas_secundarias:
-            candidatos.append(('listado', fichas_secundarias))
-
-        if not candidatos:
-            return jsonify({
-                "error": "No es posible procesar el formulario porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
-            }), 404
-
-        print(f"  F033: {'SI' if not usar_ficha_fallback else 'NO (usando ficha tecnica)'} | Candidatos: {[c[0] for c in candidatos]}")
-
-        print("PASO 3: Extrayendo items con Claude...")
-        items = []
-        for nombre_candidato, fichas_bytes in candidatos:
-            print(f"  Probando con: {nombre_candidato}")
-            items = extraer_items_con_claude(fichas_bytes, referencia)
-            print(f"  -> {len(items)} items encontrados")
-            if len(items) >= 5:
-                print(f"  Usando {nombre_candidato} ({len(items)} items)")
-                break
-            else:
-                print(f"  Muy pocos items en {nombre_candidato}, probando siguiente...")
-
-        if not items:
-            return jsonify({"error": "Claude no extrajo items de ninguno de los PDFs disponibles"}), 500
-
-        print("PASO 4: Generando formulario de oferta...")
-        if usar_ficha_fallback:
-            docx_relleno = generar_oferta_desde_ficha(
-                items,
-                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"
-            )
-            nombre_descarga = f"Ficha_Tecnica_{nombre_seguro}.docx"
-            print(f"  Oferta desde ficha tecnica lista ({len(docx_relleno)} bytes)")
-        else:
-            docx_relleno = llenar_f033(f033_bytes, items)
-            nombre_descarga = f"F033_{nombre_seguro}.docx"
-            print(f"  F033 pre-llenado listo ({len(docx_relleno)} bytes)")
-
-        return send_file(
-            io.BytesIO(docx_relleno),
-            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-            as_attachment=True,
-            download_name=nombre_descarga
-        )
-
-    except Exception as e:
-        print(f"Agente 033 error: {str(e)}")
+	            zf_handle = zipfile.ZipFile(zip_path, 'r')
+	        except zipfile.BadZipFile:
+	            return jsonify({
+	                "error": "El archivo descargado del SECP esta corrupto o incompleto. Intenta de nuevo."
+	            }), 500
+	        except Exception as e:
+	            return jsonify({
+	                "error": f"No se pudo abrir el archivo ZIP: {str(e)}"
+	            }), 500
+	
+	        with zf_handle as zf:
+	            archivos = zf.namelist()
+	
+	            if not archivos:
+	                return jsonify({"error": "El ZIP descargado esta vacio."}), 500
+	
+	            tiene_adjuntos = any('1_Publicaciones/Adjuntos/' in a for a in archivos)
+	            if not tiene_adjuntos:
+	                return jsonify({
+	                    "error": "El ZIP no contiene la carpeta 1_Publicaciones/Adjuntos/. La estructura del expediente es diferente a la esperada."
+	                }), 500
+	
+	            nombre_ficha_encontrada = None
+	            for archivo in archivos:
+	                if '1_Publicaciones/Adjuntos/' not in archivo:
+	                    continue
+	                nombre = os.path.basename(archivo).lower()
+	
+	                if archivo.lower().endswith(('.docx', '.doc')):
+	                    if '033' in nombre:
+	                        f033_bytes = zf.read(archivo)
+	                        print(f"  F033 encontrado: {os.path.basename(archivo)}")
+	
+	                if archivo.lower().endswith('.pdf'):
+	                    es_ficha = any(k in nombre for k in ['ficha', 'tecnica'])
+	                    es_pliego = any(k in nombre for k in ['pliego', 'condiciones', 'terminos'])
+	                    es_listado = any(k in nombre for k in ['listado', 'especificacion'])
+	                    if es_ficha:
+	                        fichas_prioritarias.append(zf.read(archivo))
+	                        if not nombre_ficha_encontrada:
+	                            nombre_ficha_encontrada = os.path.basename(archivo)
+	                        print(f"  Ficha tecnica: {os.path.basename(archivo)}")
+	                    elif es_pliego:
+	                        fichas_pliego.append(zf.read(archivo))
+	                        print(f"  Pliego: {os.path.basename(archivo)}")
+	                    elif es_listado:
+	                        fichas_secundarias.append(zf.read(archivo))
+	                        print(f"  Listado: {os.path.basename(archivo)}")
+	
+	        if not f033_bytes:
+	            try:
+	                with zipfile.ZipFile(zip_path, 'r') as zf_retry:
+	                    for nombre_doc, doc_bytes in extraer_docx_de_adjuntos(zf_retry):
+	                        if '033' in nombre_doc:
+	                            f033_bytes = doc_bytes
+	                            print(f"  F033 encontrado en ZIP anidado: {nombre_doc}")
+	                            break
+	            except Exception as e:
+	                print(f"  Error buscando F033 en ZIP anidado: {e}")
+	
+	        usar_ficha_fallback = False
+	        if not f033_bytes:
+	            if fichas_prioritarias:
+	                usar_ficha_fallback = True
+	                print(f"  F033 no encontrado — usando ficha tecnica como fallback")
+	            else:
+	                return jsonify({
+	                    "error": "No se encontro el F033 (.docx) en 1_Publicaciones/Adjuntos/ ni en ZIPs anidados. Esta licitacion puede ser Comparacion de Precios."
+	                }), 404
+	
+	        candidatos = []
+	        if fichas_pliego:
+	            candidatos.append(('pliego', fichas_pliego))
+	        if fichas_prioritarias:
+	            candidatos.append(('ficha tecnica', fichas_prioritarias))
+	        if fichas_secundarias:
+	            candidatos.append(('listado', fichas_secundarias))
+	
+	        if not candidatos:
+	            return jsonify({
+	                "error": "No es posible procesar el formulario porque no se encontraron PDFs con items en 1_Publicaciones/Adjuntos/."
+	            }), 404
+	
+	        print(f"  F033: {'SI' if not usar_ficha_fallback else 'NO (usando ficha tecnica)'} | Candidatos: {[c[0] for c in candidatos]}")
+	
+	        print("PASO 3: Extrayendo items con Claude...")
+	        items = []
+	        for nombre_candidato, fichas_bytes in candidatos:
+	            print(f"  Probando con: {nombre_candidato}")
+	            items = extraer_items_con_claude(fichas_bytes, referencia)
+	            print(f"  -> {len(items)} items encontrados")
+	            if len(items) >= 5:
+	                print(f"  Usando {nombre_candidato} ({len(items)} items)")
+	                break
+	            else:
+	                print(f"  Muy pocos items en {nombre_candidato}, probando siguiente...")
+	
+	        if not items:
+	            return jsonify({"error": "Claude no extrajo items de ninguno de los PDFs disponibles"}), 500
+	
+	        print("PASO 4: Generando formulario de oferta...")
+	        if usar_ficha_fallback:
+	            docx_relleno = generar_oferta_desde_ficha(
+	                items,
+	                nombre_ficha=nombre_ficha_encontrada or "ficha tecnica"
+	            )
+	            nombre_descarga = f"Ficha_Tecnica_{nombre_seguro}.docx"
+	            print(f"  Oferta desde ficha tecnica lista ({len(docx_relleno)} bytes)")
+	        else:
+	            docx_relleno = llenar_f033(f033_bytes, items)
+	            nombre_descarga = f"F033_{nombre_seguro}.docx"
+	            print(f"  F033 pre-llenado listo ({len(docx_relleno)} bytes)")
+	
+	        return send_file(
+	            io.BytesIO(docx_relleno),
+	            mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+	            as_attachment=True,
+	            download_name=nombre_descarga
+	        )
+	
+	    except Exception as e:
+	        print(f"Agente 033 error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 # ══════════════════════════════════════════════════════════════════════════════
