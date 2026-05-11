@@ -2197,7 +2197,6 @@ def generar_html_reporte(referencia, datos):
     dictamen      = datos.get('dictamen', {})
     analisis      = datos.get('analisis_pliego')
     perfil        = datos.get('perfil_licitador')
-    mapeo         = datos.get('mapeo_catalogo')
     precios       = datos.get('precios_historicos', [])
     kanban_prompt = datos.get('kanban_prompt', '')
     f033_url      = datos.get('f033_url')
@@ -2254,19 +2253,6 @@ def generar_html_reporte(referencia, datos):
             t1.append(f'<div class="task"><span class="dot amber"></span><span class="task-txt">Pliego no analizado — <a href="{pliego_url}" download style="background:#EAF3DE;color:#3B6D11;text-decoration:none;margin-left:6px;display:inline-block;padding:2px 9px;border-radius:4px;font-size:11px;font-weight:600;">Descargar pliego</a></span></div>')
         else:
             t1.append(t_human('Analizar pliego desde Compita — requerido para continuar'))
-        total_human += 1
-
-    if mapeo:
-        nc  = len(mapeo.get('compatibles', []))
-        npr = len(mapeo.get('requieren_proveedor', []))
-        if mapeo.get('sin_informacion_suficiente'):
-            t1.append(t_human('Mapeo catalogo vs. items — completar descripcion de empresa en Compita'))
-            total_human += 1
-        else:
-            t1.append(t_claude(f'Mapeo catalogo: {nc} compatibles, {npr} por confirmar', 'mapeo', 'ver tabla'))
-            total_claude += 1
-    else:
-        t1.append(t_human('Mapeo catalogo vs. items — requiere analisis del pliego'))
         total_human += 1
 
     t1.append(t_human('Confirmar disponibilidad de items con proveedor externo'))
@@ -2399,20 +2385,6 @@ def generar_html_reporte(referencia, datos):
         if opcs_li or riesgos_li:
             grid_eval = f"<div class='grid2'><div class='card-green'><strong>Oportunidades</strong><ul class='ul-items'>{opcs_li}</ul></div><div class='card-amber'><strong>Riesgos</strong><ul class='ul-items'>{riesgos_li}</ul></div></div>"
         det += f'<div class="sec" id="sintesis"><div class="sec-hdr"><span class="sec-ttl">Sintesis del pliego</span><span class="bdg-ok">Claude</span></div><p class="sec-txt">{analisis["sintesis"]}</p>{grid_eval}</div>'
-
-    if mapeo and not mapeo.get('sin_informacion_suficiente'):
-        compat = mapeo.get('compatibles', [])
-        prov   = mapeo.get('requieren_proveedor', [])
-        li_c   = ''.join(f'<li>{i}</li>' for i in compat) or '<li>No determinado con los datos disponibles</li>'
-        li_p   = ''.join(f'<li>{i}</li>' for i in prov)
-        card_p = f'<div class="card-amber"><strong>{len(prov)} por confirmar con proveedor</strong><ul class="ul-items">{li_p}</ul></div>' if prov else ''
-        det += f'''<div class="sec" id="mapeo">
-  <div class="sec-hdr"><span class="sec-ttl">Mapeo catalogo vs. items requeridos</span><span class="bdg-ok">Claude</span></div>
-  <div class="grid2">
-    <div class="card-green"><strong>{len(compat)} compatibles</strong><ul class="ul-items">{li_c}</ul></div>
-    {card_p}
-  </div>
-</div>'''
 
     if perfil:
         filas_p = ''
@@ -2848,11 +2820,7 @@ def generar_reporte():
         precios = buscar_precios_referencia(titulo_lic, titulo_lic)
         print(f"  {len(precios)} precios encontrados")
 
-        mapeo     = None
-        requisitos = (analisis_pliego or {}).get('requisitos', [])
-        if empresa_desc and requisitos:
-            print("PASO 7: Mapeando catalogo vs. pliego...")
-            mapeo = mapear_catalogo_con_claude(empresa_desc, requisitos, api_key)
+        mapeo = None
 
         print("PASO 8: Generando prompt KanbanBonsai...")
         kanban_prompt = generar_prompt_kanban(
