@@ -2191,7 +2191,7 @@ SPRINT 5 — Entrega y Seguimiento
         return ''
 
 
-def generar_html_reporte(referencia, datos):
+def generar_html_reporte(referencia, datos, token=''):
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
     licitacion    = datos.get('licitacion', {})
     dictamen      = datos.get('dictamen', {})
@@ -2453,6 +2453,7 @@ def generar_html_reporte(referencia, datos):
             det += f'<div class="sec" id="tiempos"><div class="sec-hdr"><span class="sec-ttl">Fechas y plazos — evidencia del pliego</span><span class="bdg-ok">Claude</span></div><table class="tbl"><tbody>{filas_t}</tbody></table></div>'
 
     kanban_json = json.dumps(kanban_prompt)
+    token_json  = json.dumps(token)
 
     return f'''<!DOCTYPE html>
 <html lang="es">
@@ -2554,23 +2555,20 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
     <div class="footer-t">Listo para trabajar en KanbanBonsai</div>
     <div class="footer-s">{total_human} tareas humanas distribuidas en 5 sprints</div>
   </div>
-  <button class="btn-kb" onclick="abrirKanban()">Abrir en KanbanBonsai</button>
+  <button class="btn-kb" onclick="abrirKanban()">Ir a KanbanBonsai</button>
 </div>
 
 <div class="meta">Generado por Claude · Compita · {fecha_generado}</div>
 </div>
 <script>
 var kp={kanban_json};
+var kt={token_json};
 function abrirKanban(){{
-  if(kp){{
-    try{{navigator.clipboard.writeText(kp);}}catch(e){{}}
-    var toast = document.createElement('div');
-    toast.id = 'kb-toast';
-    toast.style.cssText = 'position:fixed;bottom:2rem;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:14px 22px;border-radius:10px;font-size:13px;line-height:1.6;max-width:380px;text-align:center;z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.3);';
-    toast.innerHTML = 'Plan copiado al portapapeles<br><span style="color:#9CA3AF;font-size:12px;">En KanbanBonsai haz clic en <strong style="color:#fff;">Generar con IA</strong> y pega con <strong style="color:#fff;">Ctrl+V</strong></span><br><span style="color:#6B7280;font-size:11px;margin-top:4px;display:block;">Este aviso desaparece en 60 segundos</span>';
-    document.body.appendChild(toast);
-    setTimeout(function(){{ window.open('https://kanban.umbusk.com/bonsais','_blank'); }}, 2000);
-    setTimeout(function(){{ var t = document.getElementById('kb-toast'); if(t) t.remove(); }}, 60000);
+  if(kt && kp){{
+    var url='https://kanban.umbusk.com/desde-compita'
+           +'?token='+encodeURIComponent(kt)
+           +'&prompt='+encodeURIComponent(kp);
+    window.open(url,'_blank');
   }} else {{
     window.open('https://kanban.umbusk.com/bonsais','_blank');
   }}
@@ -2627,6 +2625,7 @@ def generar_reporte():
         referencia = data.get('referencia')
         licitacion = data.get('licitacion', {})
         dictamen   = data.get('dictamen', {})
+        token      = data.get('token', '')   # ← token Compita para el botón KB
 
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
@@ -2846,7 +2845,7 @@ def generar_reporte():
             'formularios_adicionales': formularios_adicionales,
             'tiene_f033':              tiene_f033,
         }
-        html = generar_html_reporte(referencia, datos)
+        html = generar_html_reporte(referencia, datos, token=token)
 
         with open(ruta_reporte, 'w', encoding='utf-8') as f:
             f.write(html)
