@@ -2003,64 +2003,172 @@ Analiza el pliego y responde SOLO con este JSON:
         return None
 
 
-def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key):
+def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key,
+                          perfil=None, formulario_disponible=False, formulario_es_ficha=False):
     try:
-        requisitos = (analisis_pliego or {}).get('requisitos', [])[:5]
-        req_texto = '\n'.join(f'- {r}' for r in requisitos) or '- No disponible'
-        garantias = (analisis_pliego or {}).get('viabilidad', {}).get('garantias', 'No especificado')
-        condiciones_texto = '\n'.join(
-            f"- {'[URGENTE] ' if c.get('urgente') else ''}{c.get('texto', '')}"
-            for c in dictamen.get('condiciones', [])
-        )
-        monto_val = licitacion.get('monto', 0)
+        # ── Inventario de outputs de Claude para Sprint 1 ──────────────────
+        outputs_claude = []
+        if analisis_pliego:
+            n_req    = len(analisis_pliego.get('requisitos', []))
+            n_riesg  = len(analisis_pliego.get('riesgos', []))
+            viab     = analisis_pliego.get('viabilidad', {}).get('veredicto', '')
+            outputs_claude.append(
+                f"- Analisis del pliego: {n_req} requisitos, {n_riesg} riesgos identificados, viabilidad {viab}"
+            )
+        if formulario_disponible:
+            tipo_form = "desde ficha tecnica (sin F033 oficial)" if formulario_es_ficha else "F033 oficial pre-llenado"
+            outputs_claude.append(
+                f"- Formulario de oferta pre-llenado ({tipo_form}) — disponible en el Reporte para descargar"
+            )
+        if perfil:
+            p = perfil
+            outputs_claude.append(
+                f"- Estado del Perfil Licitador: {len(p.get('permanentes',[]))} permanentes, "
+                f"{len(p.get('vigentes',[]))} vigentes, "
+                f"{len(p.get('por_vencer',[]))} por vencer, "
+                f"{len(p.get('vencidos',[]))} vencidos"
+            )
+        if analisis_pliego and analisis_pliego.get('requisitos'):
+            outputs_claude.append(
+                f"- Checklist de {len(analisis_pliego['requisitos'])} documentos/requisitos de entrega extraidos del pliego"
+            )
+        outputs_texto = '\n'.join(outputs_claude) or '- No hay outputs adicionales de Claude'
+
+        # ── Tareas documentales reales (solo lo que requiere accion) ───────
+        doc_tipo_a = []  # renovaciones del Perfil
+        doc_tipo_b = []  # requisitos especificos de la licitacion
+
+        if perfil:
+            for d in perfil.get('vencidos', []):
+                doc_tipo_a.append(f"URGENTE — Renovar: {d}")
+            for d in perfil.get('por_vencer', []):
+                doc_tipo_a.append(f"Renovar antes del cierre: {d}")
+
+        garantias = (analisis_pliego or {}).get('viabilidad', {}).get('garantias', '')
+        if garantias:
+            doc_tipo_b.append(f"Tramitar: {garantias[:120]}")
+
+        certs = (analisis_pliego or {}).get('certificaciones_iso', {})
+        if certs.get('exige_iso') == 'SI':
+            for c in certs.get('listado', []):
+                doc_tipo_b.append(f"Verificar u obtener: {c}")
+
+        if doc_tipo_a:
+            doc_ctx = "RENOVACIONES PENDIENTES DEL PERFIL:\n" + '\n'.join(f"- {t}" for t in doc_tipo_a) + "\n"
+        else:
+            doc_ctx = "PERFIL AL DIA: no hay documentos vencidos ni por vencer.\n"
+        if doc_tipo_b:
+            doc_ctx += "REQUISITOS ESPECIFICOS DE ESTA LICITACION (no cubiertos por el Perfil):\n"
+            doc_ctx += '\n'.join(f"- {t}" for t in doc_tipo_b)
+        else:
+            doc_ctx += "No se detectaron requisitos documentales adicionales especificos para esta licitacion."
+
+        # ── Requisitos tecnicos para Sprint 3 ─────────────────────────────
+        req_lista = (analisis_pliego or {}).get('requisitos', [])[:6]
+        req_texto = '\n'.join(f'- {r}' for r in req_lista) or '- Ver analisis del pliego'
+
+        # ── Datos de la licitacion ─────────────────────────────────────────
+        dias         = licitacion.get('diasDisponibles', '')
+        fecha_limite = licitacion.get('fecha_presentacion', 'No especificada')
+        monto_val    = licitacion.get('monto', 0)
         try:
             monto_fmt = f"RD${float(monto_val):,.0f}"
         except Exception:
             monto_fmt = str(monto_val)
-        prompt = f"""Genera un plan de trabajo para KanbanBonsai con 5 sprints para esta licitacion.
 
-LICITACION: {referencia} — {licitacion.get('descripcion', '')}
-ENTIDAD: {licitacion.get('entidad', '')}
-TIPO: {licitacion.get('tipo', '')} · MONTO: {monto_fmt} · DIAS: {licitacion.get('diasDisponibles', '')}
-EMPRESA: {empresa_desc}
-COACH: {dictamen.get('veredicto', '')}
+        instruccion_form = (
+            "Completar precios unitarios en el formulario pre-llenado descargado en Sprint 1 (items y cantidades ya estan)"
+            if formulario_disponible else
+            "Crear formulario de oferta economica con todos los items, unidades, cantidades y precios"
+        )
+
+        condiciones_texto = '\n'.join(
+            f"- {'[URGENTE] ' if c.get('urgente') else ''}{c.get('texto', '')}"
+            for c in dictamen.get('condiciones', [])
+        )
+
+        prompt = f"""Genera el plan de trabajo en KanbanBonsai para preparar la oferta en esta licitacion.
+El usuario YA DECIDIO participar. El plan debe reflejar lo que Claude ya hizo y lo que solo el usuario puede hacer.
+
+LICITACION: {referencia}
+Descripcion: {licitacion.get('descripcion', '')}
+Entidad: {licitacion.get('entidad', '')}
+Tipo: {licitacion.get('tipo', '')} | Monto: {monto_fmt}
+Dias disponibles para presentar la oferta: {dias} | Fecha limite de presentacion: {fecha_limite}
+Empresa: {empresa_desc}
+Coach: {dictamen.get('veredicto', '')}
 {condiciones_texto}
-REQUISITOS: {req_texto}
-GARANTIAS: {garantias}
+
+OUTPUTS QUE CLAUDE YA PREPARO:
+{outputs_texto}
+
+SITUACION DOCUMENTAL:
+{doc_ctx}
+
+ESPECIFICACIONES TECNICAS EXTRAIDAS DEL PLIEGO:
+{req_texto}
+
+INSTRUCCIONES PARA CADA SPRINT:
+
+SPRINT 1 — Lo que Claude ya preparo:
+Lista SOLO los outputs reales de la seccion OUTPUTS QUE CLAUDE YA PREPARO.
+Cada tarea es una accion concreta: "Descargar X", "Revisar Y", "Anotar Z".
+No agregues tareas de analisis ni de decision — Claude ya las resolvio.
+3 a 4 tareas.
+
+SPRINT 2 — Documentacion Legal:
+Usa SOLO lo que dice SITUACION DOCUMENTAL.
+Si el perfil esta al dia y no hay requisitos adicionales, la unica tarea es compilar el expediente.
+No repitas documentos ya vigentes. 3 a 4 tareas maximo.
+
+SPRINT 3 — Oferta Tecnica:
+Tareas concretas para validar cada especificacion de ESPECIFICACIONES TECNICAS EXTRAIDAS,
+conseguir fichas tecnicas de fabricantes, y preparar la propuesta tecnica. 3 a 4 tareas.
+
+SPRINT 4 — Oferta Economica:
+Primera tarea siempre: {instruccion_form}
+Luego: negociar precios con proveedores, calcular totales y margenes, preparar documentos economicos requeridos.
+3 a 4 tareas.
+
+SPRINT 5 — Entrega y Seguimiento:
+Ensamblar expediente con el checklist del pliego, autenticar documentos, presentar antes de {fecha_limite}
+({dias} dias disponibles para preparar la oferta), obtener constancia.
+NO mencionar plazos de entrega del producto — eso es post-adjudicacion.
+3 a 4 tareas.
+
+REGLA GENERAL: cada tarea es una accion ("Descargar", "Tramitar", "Confirmar", "Completar"),
+nunca una evaluacion ni descripcion. No repitas lo que Claude ya hizo.
 
 Responde UNICAMENTE con este formato:
 
-PROYECTO: [nombre especifico, maximo 8 palabras]
+PROYECTO: [nombre especifico maximo 8 palabras]
 DESCRIPCION: [2 lineas sobre el objetivo]
 
-SPRINT 1 — Analisis y Evaluacion
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
+SPRINT 1 — Lo que Claude ya preparo
+- [tarea]
+- [tarea]
+- [tarea]
 
 SPRINT 2 — Documentacion Legal
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
+- [tarea]
+- [tarea]
+- [tarea]
 
 SPRINT 3 — Oferta Tecnica
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
+- [tarea]
+- [tarea]
+- [tarea]
 
 SPRINT 4 — Oferta Economica
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]
+- [tarea]
+- [tarea]
+- [tarea]
 
 SPRINT 5 — Entrega y Seguimiento
-- [tarea especifica]
-- [tarea especifica]
-- [tarea especifica]"""
+- [tarea]
+- [tarea]
+- [tarea]"""
+
         resp = requests.post(
             'https://api.anthropic.com/v1/messages',
             headers={
@@ -2070,7 +2178,7 @@ SPRINT 5 — Entrega y Seguimiento
             },
             json={
                 'model': 'claude-sonnet-4-20250514',
-                'max_tokens': 1200,
+                'max_tokens': 1400,
                 'messages': [{'role': 'user', 'content': prompt}]
             },
             timeout=60
@@ -2748,7 +2856,10 @@ def generar_reporte():
 
         print("PASO 8: Generando prompt KanbanBonsai...")
         kanban_prompt = generar_prompt_kanban(
-            referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key
+            referencia, licitacion, dictamen, analisis_pliego, empresa_desc, api_key,
+            perfil=perfil,
+            formulario_disponible=f033_ruta is not None,
+            formulario_es_ficha=tiene_f033 is False
         )
 
         print("PASO 9: Generando HTML del Reporte...")
