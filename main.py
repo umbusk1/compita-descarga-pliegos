@@ -780,11 +780,12 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
                     continue
 
             total_paginas = len(reader.pages)
+            es_imagen = False
             if total_paginas > 0 and paginas_sin_texto == total_paginas:
-                print(f"PDF {indice + 1} parece ser solo imagenes ({total_paginas} paginas sin texto) - omitido")
-                return []
-
-            if paginas_sin_texto > 0:
+                print(f"PDF {indice + 1} es imagen ({total_paginas} pags sin texto) — enviando como documento nativo a Claude")
+                es_imagen = True
+                texto = "[PDF de imagen — se adjunta como documento nativo para extraccion de items]"
+            elif paginas_sin_texto > 0:
                 print(f"PDF {indice + 1}: {paginas_sin_texto} de {total_paginas} paginas sin texto")
 
         except Exception as e:
@@ -797,7 +798,7 @@ def extraer_items_con_claude(pdf_bytes_list, referencia):
                 print(f"Error leyendo PDF {indice + 1}: {e}")
             return []
 
-        if not texto.strip():
+        if not texto.strip() and not es_imagen:
             print(f"PDF {indice + 1} no tiene texto extraible - omitido")
             return []
 
@@ -861,6 +862,23 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
             "anthropic-version": "2023-06-01"
         }
         payload = {
+            "model": "claude-sonnet-4-20250514",
+            "max_tokens": 16000,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "document",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "application/pdf",
+                            "data": base64.b64encode(pdf_bytes).decode('utf-8')
+                        }
+                    },
+                    {"type": "text", "text": prompt}
+                ]
+            }]
+        } if es_imagen else {
             "model": "claude-sonnet-4-20250514",
             "max_tokens": 16000,
             "messages": [{"role": "user", "content": prompt}]
