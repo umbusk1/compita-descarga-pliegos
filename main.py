@@ -20,7 +20,12 @@ import threading
 import psycopg2
 
 app = Flask(__name__)
-CORS(app, origins=["https://compita.umbusk.com"])
+# Nov 2026: Compita se muda a compita.do; se aceptan ambas direcciones durante la transición
+CORS(app, origins=[
+    "https://compita.umbusk.com",
+    "https://compita.do",
+    "https://www.compita.do",
+])
 
 TEMP_DIR = "/tmp/descargas"
 CACHE_DIAS = 30
