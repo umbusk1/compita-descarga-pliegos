@@ -27,7 +27,11 @@ CORS(app, origins=[
     "https://www.compita.do",
 ])
 
-TEMP_DIR = "/tmp/descargas"
+# Carpeta base para pliegos, F033 y reportes. Si el servicio tiene un disco permanente
+# (volume) en Railway, se usa ese disco y los archivos sobreviven a cada despliegue.
+DATOS_DIR = os.environ.get('DATOS_DIR') or os.environ.get('RAILWAY_VOLUME_MOUNT_PATH') or '/tmp'
+TEMP_DIR = os.path.join(DATOS_DIR, 'descargas')
+print(f"Carpeta de datos: {DATOS_DIR}")
 CACHE_DIAS = 30
 
 # Modelo de Claude en un solo lugar. Se puede cambiar sin tocar el código con la
@@ -94,21 +98,25 @@ def json_de_claude(respuesta_json):
 
 def limpiar_archivos_viejos():
     try:
-        if not os.path.exists(TEMP_DIR):
-            return
         ahora = time.time()
         archivos_borrados = 0
-        for archivo in os.listdir(TEMP_DIR):
-            ruta_completa = os.path.join(TEMP_DIR, archivo)
-            edad_segundos = ahora - os.path.getmtime(ruta_completa)
-            edad_dias = edad_segundos / (60 * 60 * 24)
-            if edad_dias > CACHE_DIAS:
-                try:
-                    os.remove(ruta_completa)
-                    archivos_borrados += 1
-                    print(f"Borrado: {archivo} (edad: {edad_dias:.1f} dias)")
-                except Exception as e:
-                    print(f"Error borrando {archivo}: {str(e)}")
+        # Con disco permanente los archivos ya no se borran solos al desplegar,
+        # así que se limpian las tres carpetas por antigüedad
+        for carpeta in (TEMP_DIR, os.path.join(DATOS_DIR, 'reportes'), os.path.join(DATOS_DIR, 'f033')):
+            if not os.path.isdir(carpeta):
+                continue
+            for archivo in os.listdir(carpeta):
+                ruta_completa = os.path.join(carpeta, archivo)
+                if not os.path.isfile(ruta_completa):
+                    continue
+                edad_dias = (ahora - os.path.getmtime(ruta_completa)) / (60 * 60 * 24)
+                if edad_dias > CACHE_DIAS:
+                    try:
+                        os.remove(ruta_completa)
+                        archivos_borrados += 1
+                        print(f"Borrado: {archivo} (edad: {edad_dias:.1f} dias)")
+                    except Exception as e:
+                        print(f"Error borrando {archivo}: {str(e)}")
         if archivos_borrados > 0:
             print(f"Limpieza completada: {archivos_borrados} archivos borrados")
     except Exception as e:
@@ -1763,8 +1771,8 @@ SPRINT 5 — Entrega y Seguimiento
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-REPORTES_DIR = "/tmp/reportes"
-F033_DIR     = "/tmp/f033"
+REPORTES_DIR = os.path.join(DATOS_DIR, 'reportes')
+F033_DIR     = os.path.join(DATOS_DIR, 'f033')
 
 
 def verificar_f033_en_cache(referencia):
