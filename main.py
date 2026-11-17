@@ -146,7 +146,16 @@ def descargar_pliego(referencia, guardar_zip=False):
             print(f"Buscando licitacion: {referencia}")
             print(f"Navegando al portal...")
             url_listado = "https://comunidad.comprasdominicana.gob.do/Public/Tendering/ContractNoticeManagement/Index"
-            page.goto(url_listado, timeout=90000)
+            # El portal a veces tarda o no responde a la primera; se reintenta hasta 3 veces
+            for intento in range(1, 4):
+                try:
+                    page.goto(url_listado, timeout=60000)
+                    break
+                except Exception as e:
+                    print(f"Intento {intento} de abrir el portal fallo: {str(e)[:120]}")
+                    if intento == 3:
+                        raise Exception("El portal de Compras Publicas no respondio tras 3 intentos. Intenta de nuevo en unos minutos.")
+                    page.wait_for_timeout(5000 * intento)
             page.wait_for_timeout(5000)
             print(f"Portal cargado")
 
