@@ -5,7 +5,7 @@ import os
 import zipfile
 import time
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import base64
 import json
 import requests
@@ -33,6 +33,45 @@ DATOS_DIR = os.environ.get('DATOS_DIR') or os.environ.get('RAILWAY_VOLUME_MOUNT_
 TEMP_DIR = os.path.join(DATOS_DIR, 'descargas')
 print(f"Carpeta de datos: {DATOS_DIR}")
 CACHE_DIAS = 30
+
+# Hora de República Dominicana (UTC-4, sin horario de verano). Las fechas de cierre
+# llegan en UTC (por ejemplo 2026-11-19T14:00:00Z) y deben mostrarse en hora local.
+ZONA_RD = timezone(timedelta(hours=-4))
+
+
+def ahora_rd():
+    return datetime.now(ZONA_RD).replace(tzinfo=None)
+
+
+def _fecha_rd(valor):
+    """Convierte una fecha ISO a hora de RD. Devuelve None si no se puede leer."""
+    if not valor:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(valor).strip().replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt  # ya viene en hora local
+    return dt.astimezone(ZONA_RD).replace(tzinfo=None)
+
+
+def fecha_cierre_rd(valor, por_defecto='No especificada'):
+    """Fecha y hora de cierre en hora de RD, p. ej. '19/11/2026 10:00 a.m. (hora de RD)'."""
+    dt = _fecha_rd(valor)
+    if dt is None:
+        return valor or por_defecto
+    hora = dt.hour % 12 or 12
+    sufijo = 'a.m.' if dt.hour < 12 else 'p.m.'
+    return f"{dt:%d/%m/%Y} {hora}:{dt.minute:02d} {sufijo} (hora de RD)"
+
+
+def dias_hasta_cierre(valor):
+    """Días calendario desde hoy (hora de RD) hasta el cierre, o None si no hay fecha."""
+    dt = _fecha_rd(valor)
+    if dt is None:
+        return None
+    return (dt.date() - ahora_rd().date()).days
 
 # Modelo de Claude en un solo lugar. Se puede cambiar sin tocar el código con la
 # variable de entorno CLAUDE_MODEL (por ejemplo, en Railway).
@@ -538,7 +577,7 @@ def analizar_pliego():
         empresa_descripcion = data.get('empresa_descripcion', '')
         empresa_website = data.get('empresa_website', '')
         fecha_presentacion = data.get('fecha_presentacion', '')
-        fecha_hoy = datetime.now().strftime('%d/%m/%Y')
+        fecha_hoy = ahora_rd().strftime('%d/%m/%Y')
 
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
@@ -644,7 +683,7 @@ CONTEXTO DE LA LICITACION:
 - Descripcion: {descripcion}
 - Monto estimado: RD${monto:,.2f}
 - Fecha de hoy: {fecha_hoy}
-- Fecha limite de presentacion: {fecha_presentacion if fecha_presentacion else 'No disponible'}
+- Fecha limite de presentacion: {fecha_cierre_rd(fecha_presentacion, 'No disponible')}
 {seccion_perfil}{bloque_precios}
 A continuacion esta el contenido completo del pliego de condiciones:
 
@@ -1693,7 +1732,7 @@ LICITACION:
 - Tipo de proceso: {licitacion.get('tipo', '')}
 - Monto estimado: {monto_fmt}
 - Dias disponibles: {licitacion.get('diasDisponibles', '')}
-- Fecha limite: {licitacion.get('fecha_presentacion', 'No especificada')}
+- Fecha limite: {fecha_cierre_rd(licitacion.get('fecha_presentacion'))}
 
 EMPRESA LICITADORA:
 {empresa_desc}
@@ -1937,7 +1976,7 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
         conn.close()
         if not docs:
             return None
-        hoy = datetime.now().date()
+        hoy = ahora_rd().date()
         vigentes, por_vencer, vencidos, sin_fecha, permanentes = [], [], [], [], []
         for nombre, es_permanente, fecha_venc in docs:
             if es_permanente:
@@ -1968,7 +2007,7 @@ def obtener_estado_perfil_licitador(empresa_id, db_url):
         return None
 
 
-def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key, monto=0):
+def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_key, monto=0, fecha_presentacion=''):
     try:
         es_pdf_imagen = False
         texto_completo = ""
@@ -1991,7 +2030,7 @@ def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_
         elif len(texto_completo) > 100000:
             texto_completo = texto_completo[:100000] + "\n\n[DOCUMENTO TRUNCADO]"
 
-        fecha_hoy = datetime.now().strftime('%d/%m/%Y')
+        fecha_hoy = ahora_rd().strftime('%d/%m/%Y')
         perfil_txt = f"\nDescripcion: {empresa_desc}" if empresa_desc else ""
         monto_txt  = f"\n- Monto oficial: RD${float(monto):,.2f} — usa esta cifra en la sintesis, no extraigas un monto diferente del documento" if monto else ""
         prompt = f"""Eres un experto analista de licitaciones publicas dominicanas.
@@ -1999,6 +2038,8 @@ def analizar_pliego_desde_cache(pdf_path, referencia, titulo, empresa_desc, api_
 CONTEXTO:
 - Referencia: {referencia}
 - Titulo: {titulo}{monto_txt}
+- Fecha de hoy: {fecha_hoy}
+- Fecha limite de presentacion: {fecha_cierre_rd(fecha_presentacion, 'No disponible')}
 {perfil_txt}
 
 ---INICIO DEL PLIEGO---
@@ -2145,7 +2186,7 @@ def generar_prompt_kanban(referencia, licitacion, dictamen, analisis_pliego, emp
 
         # ── Datos de la licitacion ─────────────────────────────────────────
         dias         = licitacion.get('diasDisponibles', '')
-        fecha_limite = licitacion.get('fecha_presentacion', 'No especificada')
+        fecha_limite = fecha_cierre_rd(licitacion.get('fecha_presentacion'))
         monto_val    = licitacion.get('monto', 0)
         try:
             monto_fmt = f"RD${float(monto_val):,.0f}"
@@ -2291,7 +2332,8 @@ def generar_html_reporte(referencia, datos, token=''):
         monto_fmt = str(monto_val)
 
     fecha_lim = licitacion.get('fecha_presentacion', '')
-    fecha_lim_corta = fecha_lim[:10] if fecha_lim else '—'
+    _cierre = _fecha_rd(fecha_lim)
+    fecha_lim_corta = _cierre.strftime('%d/%m/%Y') if _cierre else (fecha_lim[:10] if fecha_lim else '—')
 
     def t_claude(txt, anchor=None, link_label='ver resultado'):
         a = f' — <a href="#{anchor}" style="color:#3B6D11;font-size:11px;">{link_label}</a>' if anchor else ''
@@ -2515,7 +2557,11 @@ def generar_html_reporte(referencia, datos, token=''):
         filas_t = ''
         if tiempos.get('fecha_limite_oferta'):
             filas_t += f'<tr><td>Fecha limite de oferta</td><td><strong>{tiempos["fecha_limite_oferta"]}</strong></td></tr>'
-        if tiempos.get('dias_calendario_restantes'):
+        dias_calc = dias_hasta_cierre(licitacion.get('fecha_presentacion'))
+        if dias_calc is not None:
+            texto_dias = f'{dias_calc} dias (cierre {fecha_cierre_rd(licitacion.get("fecha_presentacion"))})' if dias_calc >= 0 else 'Plazo vencido'
+            filas_t += f'<tr><td>Dias restantes</td><td>{texto_dias}</td></tr>'
+        elif tiempos.get('dias_calendario_restantes'):
             filas_t += f'<tr><td>Dias restantes</td><td>{tiempos["dias_calendario_restantes"]}</td></tr>'
         alerta = tiempos.get('alerta', '')
         color_alerta = {'HOLGADO': '#3B6D11', 'AJUSTADO': '#92400E', 'MUY AJUSTADO': '#DC2626'}.get(alerta, '#6B7280')
@@ -2848,7 +2894,8 @@ def generar_reporte():
             titulo_lic = licitacion.get('descripcion', '')
             analisis_pliego = analizar_pliego_desde_cache(
                 pdf_cache, referencia, titulo_lic, empresa_desc, api_key,
-                monto=licitacion.get('monto', 0)
+                monto=licitacion.get('monto', 0),
+                fecha_presentacion=licitacion.get('fecha_presentacion', '')
             )
             if analisis_pliego and db_url and empresa_id:
                 try:
