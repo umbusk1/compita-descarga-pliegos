@@ -58,6 +58,40 @@ def error_claude(response):
     return f"Error de Claude API: {response.status_code}" + (f" ({mensaje})" if mensaje else "")
 
 
+class RespuestaClaudeInvalida(ValueError):
+    """La respuesta de Claude llegó, pero no trae un JSON que se pueda leer."""
+
+
+def json_de_claude(respuesta_json):
+    """Saca el objeto JSON de la respuesta de Claude, reparándolo si viene mal formado o cortado."""
+    motivo = respuesta_json.get('stop_reason')
+    uso = respuesta_json.get('usage', {})
+    print(f"Respuesta de Claude: stop_reason={motivo}, tokens de salida={uso.get('output_tokens')}")
+    if motivo == 'refusal':
+        raise RespuestaClaudeInvalida('Claude se negó a analizar este documento')
+    texto = texto_claude(respuesta_json).replace('```json', '').replace('```', '').strip()
+    inicio = texto.find('{')
+    if inicio == -1:
+        print(f"Respuesta sin JSON. Primeros 300 caracteres: {texto[:300]!r}")
+        raise RespuestaClaudeInvalida(f'Claude no devolvió JSON (fin: {motivo})')
+    fin = texto.rfind('}')
+    if fin > inicio:
+        try:
+            return json.loads(texto[inicio:fin + 1])
+        except json.JSONDecodeError as e:
+            print(f"JSON de Claude mal formado ({e}); se intenta reparar")
+    # Mal formado o cortado (por ejemplo, si se acabaron los max_tokens): intentar repararlo
+    try:
+        reparado = json.loads(repair_json(texto[inicio:]))
+    except Exception:
+        reparado = None
+    if isinstance(reparado, dict) and reparado:
+        if motivo == 'max_tokens':
+            print('Aviso: la respuesta de Claude llegó cortada por max_tokens; se reparó el JSON')
+        return reparado
+    raise RespuestaClaudeInvalida(f'No se pudo leer el JSON de Claude (fin: {motivo})')
+
+
 def limpiar_archivos_viejos():
     try:
         if not os.path.exists(TEMP_DIR):
@@ -668,7 +702,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
                 pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
             payload = {
                 "model": CLAUDE_MODEL, **OPCIONES_CLAUDE,
-                "max_tokens": 3000,
+                "max_tokens": 8000,
                 "messages": [{
                     "role": "user",
                     "content": [
@@ -691,7 +725,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             print("Enviando texto del pliego a Claude AI...")
             payload = {
                 "model": CLAUDE_MODEL, **OPCIONES_CLAUDE,
-                "max_tokens": 3000,
+                "max_tokens": 8000,
                 "messages": [{"role": "user", "content": prompt_analisis}]
             }
 
@@ -711,17 +745,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
         if response.status_code != 200:
             raise Exception(error_claude(response))
 
-        claude_response = response.json()
-        analisis_texto = texto_claude(claude_response)
-        analisis_texto = analisis_texto.replace('```json', '').replace('```', '').strip()
-
-        inicio = analisis_texto.find('{')
-        fin = analisis_texto.rfind('}')
-        if inicio == -1 or fin == -1:
-            raise json.JSONDecodeError('No se encontro JSON valido', analisis_texto, 0)
-        analisis_texto = analisis_texto[inicio:fin+1]
-
-        analisis = json.loads(analisis_texto)
+        analisis = json_de_claude(response.json())
 
         if 'precios_historicos' not in analisis:
             analisis['precios_historicos'] = precios_ref
@@ -735,11 +759,11 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             'tiene_precios_historicos': len(precios_ref) > 0
         })
 
-    except json.JSONDecodeError as e:
+    except (RespuestaClaudeInvalida, json.JSONDecodeError) as e:
         print(f"Error parseando JSON del analisis: {str(e)}")
         return jsonify({
             'success': False,
-            'error': 'Error al procesar respuesta de Claude AI'
+            'error': f'Error al procesar respuesta de Claude AI: {str(e)}'
         }), 500
 
     except Exception as e:
@@ -2022,7 +2046,7 @@ Analiza el pliego y responde SOLO con este JSON:
             },
             json={
                 'model': CLAUDE_MODEL, **OPCIONES_CLAUDE,
-                'max_tokens': 3000,
+                'max_tokens': 8000,
                 'messages': messages
             },
             timeout=90
@@ -2032,13 +2056,7 @@ Analiza el pliego y responde SOLO con este JSON:
             return None
         if resp.status_code != 200:
             return None
-        texto_resp = texto_claude(resp.json())
-        texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
-        inicio = texto_resp.find('{')
-        fin = texto_resp.rfind('}')
-        if inicio == -1 or fin == -1:
-            return None
-        return json.loads(texto_resp[inicio:fin+1])
+        return json_de_claude(resp.json())
     except Exception as e:
         print(f'Error en analisis desde cache: {e}')
         return None
