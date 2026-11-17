@@ -30,6 +30,33 @@ CORS(app, origins=[
 TEMP_DIR = "/tmp/descargas"
 CACHE_DIAS = 30
 
+# Modelo de Claude en un solo lugar. Se puede cambiar sin tocar el código con la
+# variable de entorno CLAUDE_MODEL (por ejemplo, en Railway).
+CLAUDE_MODEL = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-5-5')
+
+# Sonnet 5.5 razona antes de responder por defecto. 'between_tools' lo apaga, así las
+# respuestas siguen siendo directas y gastan los mismos tokens que con el modelo anterior.
+# Solo Sonnet 5.5 acepta ese valor, por eso se agrega únicamente con ese modelo.
+OPCIONES_CLAUDE = {'thinking': {'type': 'between_tools'}} if CLAUDE_MODEL == 'claude-sonnet-5-5' else {}
+
+
+def texto_claude(respuesta_json):
+    """Une los bloques de texto de la respuesta de Claude (ignora los de razonamiento)."""
+    return ''.join(
+        bloque.get('text', '')
+        for bloque in respuesta_json.get('content', [])
+        if bloque.get('type') == 'text'
+    )
+
+
+def error_claude(response):
+    """Describe un error de la API de Claude con el código y el mensaje que devuelve."""
+    try:
+        mensaje = response.json().get('error', {}).get('message', '')
+    except Exception:
+        mensaje = ''
+    return f"Error de Claude API: {response.status_code}" + (f" ({mensaje})" if mensaje else "")
+
 
 def limpiar_archivos_viejos():
     try:
@@ -471,7 +498,16 @@ def analizar_pliego():
 
         if not archivo_pdf:
             print(f"Archivo no encontrado en cache, descargando...")
-            archivo_pdf = descargar_pliego(referencia)
+            try:
+                archivo_pdf = descargar_pliego(referencia)
+            except Exception as e:
+                # sin_pliego le indica al Coach que de verdad no hubo pliego que analizar
+                print(f"No se pudo obtener el pliego de {referencia}: {str(e)}")
+                return jsonify({
+                    'success': False,
+                    'sin_pliego': True,
+                    'error': str(e)
+                }), 404
         else:
             print(f"Usando archivo desde cache: {archivo_pdf}")
 
@@ -631,7 +667,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             with open(archivo_pdf, 'rb') as f:
                 pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
             payload = {
-                "model": "claude-sonnet-4-20250514",
+                "model": CLAUDE_MODEL, **OPCIONES_CLAUDE,
                 "max_tokens": 3000,
                 "messages": [{
                     "role": "user",
@@ -654,7 +690,7 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
         else:
             print("Enviando texto del pliego a Claude AI...")
             payload = {
-                "model": "claude-sonnet-4-20250514",
+                "model": CLAUDE_MODEL, **OPCIONES_CLAUDE,
                 "max_tokens": 3000,
                 "messages": [{"role": "user", "content": prompt_analisis}]
             }
@@ -673,10 +709,10 @@ IMPORTANTE: Responde SOLO con el JSON, sin texto adicional ni markdown."""
             }), 400
 
         if response.status_code != 200:
-            raise Exception(f"Error de Claude API: {response.status_code}")
+            raise Exception(error_claude(response))
 
         claude_response = response.json()
-        analisis_texto = claude_response['content'][0]['text']
+        analisis_texto = texto_claude(claude_response)
         analisis_texto = analisis_texto.replace('```json', '').replace('```', '').strip()
 
         inicio = analisis_texto.find('{')
@@ -867,7 +903,7 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
             "anthropic-version": "2023-06-01"
         }
         payload = {
-            "model": "claude-sonnet-4-20250514",
+            "model": CLAUDE_MODEL, **OPCIONES_CLAUDE,
             "max_tokens": 16000,
             "messages": [{
                 "role": "user",
@@ -884,7 +920,7 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
                 ]
             }]
         } if es_imagen else {
-            "model": "claude-sonnet-4-20250514",
+            "model": CLAUDE_MODEL, **OPCIONES_CLAUDE,
             "max_tokens": 16000,
             "messages": [{"role": "user", "content": prompt}]
         }
@@ -896,10 +932,10 @@ Responde UNICAMENTE con JSON valido, sin texto adicional:
             timeout=300
         )
         if resp.status_code != 200:
-            print(f"Error Claude API en PDF {indice + 1}: {resp.status_code}")
+            print(f"PDF {indice + 1}: {error_claude(resp)}")
             return []
 
-        texto_resp = resp.json()['content'][0]['text']
+        texto_resp = texto_claude(resp.json())
         texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
         inicio = texto_resp.find('{')
         fin = texto_resp.rfind('}')
@@ -1674,7 +1710,7 @@ SPRINT 5 — Entrega y Seguimiento
                 'anthropic-version': '2023-06-01'
             },
             json={
-                'model': 'claude-sonnet-4-20250514',
+                'model': CLAUDE_MODEL, **OPCIONES_CLAUDE,
                 'max_tokens': 1200,
                 'messages': [{'role': 'user', 'content': prompt}]
             },
@@ -1682,9 +1718,9 @@ SPRINT 5 — Entrega y Seguimiento
         )
 
         if response.status_code != 200:
-            raise Exception(f'Error Claude API: {response.status_code}')
+            raise Exception(error_claude(response))
 
-        plan_generado = response.json()['content'][0]['text'].strip()
+        plan_generado = texto_claude(response.json()).strip()
         print(f'Plan generado: {len(plan_generado)} caracteres')
 
         return jsonify({'success': True, 'prompt': plan_generado})
@@ -1823,7 +1859,7 @@ pon sin_informacion_suficiente: true y listas vacias. No inventes."""
                 'anthropic-version': '2023-06-01'
             },
             json={
-                'model': 'claude-sonnet-4-20250514',
+                'model': CLAUDE_MODEL, **OPCIONES_CLAUDE,
                 'max_tokens': 800,
                 'messages': [{'role': 'user', 'content': prompt}]
             },
@@ -1831,7 +1867,7 @@ pon sin_informacion_suficiente: true y listas vacias. No inventes."""
         )
         if resp.status_code != 200:
             return None
-        texto = resp.json()['content'][0]['text'].strip()
+        texto = texto_claude(resp.json()).strip()
         texto = texto.replace('```json', '').replace('```', '').strip()
         inicio = texto.find('{')
         fin = texto.rfind('}')
@@ -1985,7 +2021,7 @@ Analiza el pliego y responde SOLO con este JSON:
                 'anthropic-version': '2023-06-01'
             },
             json={
-                'model': 'claude-sonnet-4-20250514',
+                'model': CLAUDE_MODEL, **OPCIONES_CLAUDE,
                 'max_tokens': 3000,
                 'messages': messages
             },
@@ -1996,7 +2032,7 @@ Analiza el pliego y responde SOLO con este JSON:
             return None
         if resp.status_code != 200:
             return None
-        texto_resp = resp.json()['content'][0]['text']
+        texto_resp = texto_claude(resp.json())
         texto_resp = texto_resp.replace('```json', '').replace('```', '').strip()
         inicio = texto_resp.find('{')
         fin = texto_resp.rfind('}')
@@ -2182,14 +2218,14 @@ SPRINT 5 — Entrega y Seguimiento
                 'anthropic-version': '2023-06-01'
             },
             json={
-                'model': 'claude-sonnet-4-20250514',
+                'model': CLAUDE_MODEL, **OPCIONES_CLAUDE,
                 'max_tokens': 1400,
                 'messages': [{'role': 'user', 'content': prompt}]
             },
             timeout=60
         )
         if resp.status_code == 200:
-            return resp.json()['content'][0]['text'].strip()
+            return texto_claude(resp.json()).strip()
         return ''
     except Exception as e:
         print(f'Error generando prompt kanban: {e}')
