@@ -18,6 +18,8 @@ from json_repair import repair_json
 from copy import deepcopy
 import threading
 import psycopg2
+import secrets
+import glob
 
 app = Flask(__name__)
 # Nov 2026: Compita se muda a compita.do; se aceptan ambas direcciones durante la transición
@@ -1811,6 +1813,28 @@ SPRINT 5 — Entrega y Seguimiento
 
 
 REPORTES_DIR = os.path.join(DATOS_DIR, 'reportes')
+
+# Cada reporte se guarda por empresa y licitación, con un sufijo aleatorio para que
+# su dirección no se pueda adivinar a partir de la referencia (que es pública).
+# Nombre: <referencia>__e<empresa_id>__<32 caracteres hexadecimales>.html
+PATRON_ID_REPORTE = re.compile(r'^[A-Za-z0-9_-]+__e[0-9A-Za-z]+__[0-9a-f]{32}$')
+
+
+def prefijo_reporte(referencia, empresa_id):
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+    empresa_seguro = re.sub(r'[^0-9A-Za-z]', '', str(empresa_id or '0')) or '0'
+    return f"{nombre_seguro}__e{empresa_seguro}__"
+
+
+def ultima_fecha_pliego(referencia):
+    # Fecha (mtime) del PDF del pliego más reciente que hay en el disco, o None
+    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
+    try:
+        fechas = [os.path.getmtime(os.path.join(TEMP_DIR, a)) for a in os.listdir(TEMP_DIR)
+                  if a.startswith(nombre_seguro + '_') and a.endswith('_documento.pdf')]
+    except Exception:
+        return None
+    return max(fechas) if fechas else None
 F033_DIR     = os.path.join(DATOS_DIR, 'f033')
 
 
@@ -2308,7 +2332,7 @@ SPRINT 5 — Entrega y Seguimiento
         return ''
 
 
-def generar_html_reporte(referencia, datos, token=''):
+def generar_html_reporte(referencia, datos):
     nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
     licitacion    = datos.get('licitacion', {})
     dictamen      = datos.get('dictamen', {})
@@ -2575,7 +2599,6 @@ def generar_html_reporte(referencia, datos, token=''):
             det += f'<div class="sec" id="tiempos"><div class="sec-hdr"><span class="sec-ttl">Fechas y plazos — evidencia del pliego</span><span class="bdg-ok">Claude</span></div><table class="tbl"><tbody>{filas_t}</tbody></table></div>'
 
     kanban_json = json.dumps(kanban_prompt)
-    token_json  = json.dumps(token)
 
     return f'''<!DOCTYPE html>
 <html lang="es">
@@ -2684,7 +2707,13 @@ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgro
 </div>
 <script>
 var kp={kanban_json};
-var kt={token_json};
+// El token de Compita llega después de # en la dirección (no se guarda en este archivo).
+// Se lee una vez y se quita de la barra para que no se copie al compartir el enlace.
+var kt='';
+try{{
+  var m=(location.hash||'').match(/[#&]t=([^&]+)/);
+  if(m){{ kt=decodeURIComponent(m[1]); history.replaceState(null,'',location.pathname+location.search); }}
+}}catch(e){{}}
 function abrirKanban(){{
   if(kt && kp){{
     var url='https://kanban.umbusk.com/desde-compita'
@@ -2747,40 +2776,26 @@ def generar_reporte():
         referencia = data.get('referencia')
         licitacion = data.get('licitacion', {})
         dictamen   = data.get('dictamen', {})
-        token      = data.get('token', '')   # ← token Compita para el botón KB
 
         if not referencia:
             return jsonify({'success': False, 'error': 'Falta referencia'}), 400
 
         nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', referencia)
         os.makedirs(REPORTES_DIR, exist_ok=True)
-        ruta_reporte = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
+        prefijo = prefijo_reporte(referencia, empresa_id)
+        id_reporte = prefijo + secrets.token_hex(16)
+        ruta_reporte = os.path.join(REPORTES_DIR, f"{id_reporte}.html")
 
         db_url  = os.environ.get('DATABASE_URL')
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
             return jsonify({'success': False, 'error': 'ANTHROPIC_API_KEY no configurada'}), 500
 
+        # force=True rehace también el análisis del pliego (por ejemplo, si el pliego cambió).
+        # Sin force se reusa el análisis guardado en Neon y no se gasta Claude en repetirlo.
+        # El reporte en sí siempre se genera de nuevo cuando se llama aquí: para no gastar,
+        # Compita abre el reporte guardado (ver /reporte-estado) en vez de llamar aquí.
         force = data.get('force', False)
-
-        analisis_en_neon = False
-        if db_url and empresa_id:
-            try:
-                conn = psycopg2.connect(db_url)
-                cur  = conn.cursor()
-                cur.execute(
-                    'SELECT 1 FROM analisis_pliegos WHERE empresa_id = %s AND referencia = %s LIMIT 1',
-                    (empresa_id, referencia)
-                )
-                analisis_en_neon = cur.fetchone() is not None
-                cur.close()
-                conn.close()
-            except Exception:
-                pass
-
-        if not force and not analisis_en_neon:
-            force = True
-            print("PASO 0: Sin analisis en Neon — forzando regeneracion del reporte")
 
         if force and db_url and empresa_id:
             try:
@@ -2797,15 +2812,6 @@ def generar_reporte():
                 conn.close()
             except Exception as e:
                 print(f"PASO 0: Error borrando analisis de Neon: {e}")
-            analisis_en_neon = False
-
-        if not force and os.path.exists(ruta_reporte):
-            edad_dias = (time.time() - os.path.getmtime(ruta_reporte)) / 86400
-            if edad_dias <= CACHE_DIAS:
-                dominio = os.environ.get('RAILWAY_PUBLIC_DOMAIN', 'compita-descarga-pliegos-production.up.railway.app')
-                url = f"https://{dominio}/reporte/{nombre_seguro}"
-                print(f"Reporte en cache: {url}")
-                return jsonify({'success': True, 'url': url, 'cached': True})
 
         print(f"\n== PIPELINE REPORTE COMPITA: {referencia} ==")
 
@@ -2968,14 +2974,25 @@ def generar_reporte():
             'formularios_adicionales': formularios_adicionales,
             'tiene_f033':              tiene_f033,
         }
-        html = generar_html_reporte(referencia, datos, token=token)
+        # El token de sesión ya no se escribe dentro del reporte: Compita lo pasa al abrirlo
+        # (después de # en la dirección, que no viaja al servidor ni queda guardado aquí)
+        html = generar_html_reporte(referencia, datos)
 
         with open(ruta_reporte, 'w', encoding='utf-8') as f:
             f.write(html)
 
-        url = f"https://{dominio}/reporte/{nombre_seguro}"
+        # Queda un solo reporte por empresa y licitación: se borran los anteriores
+        for viejo in glob.glob(os.path.join(REPORTES_DIR, glob.escape(prefijo) + '*.html')):
+            if os.path.abspath(viejo) != os.path.abspath(ruta_reporte):
+                try:
+                    os.remove(viejo)
+                except Exception as e:
+                    print(f"No se pudo borrar reporte anterior {viejo}: {e}")
+
+        url = f"https://{dominio}/reporte/{id_reporte}"
         print(f"== Reporte listo: {url} ==\n")
-        return jsonify({'success': True, 'url': url, 'cached': False})
+        return jsonify({'success': True, 'url': url, 'id': id_reporte, 'cached': False,
+                        'generado': datetime.now(ZONA_RD).isoformat()})
 
     except Exception as e:
         print(f"Error en generar-reporte: {str(e)}")
@@ -3015,13 +3032,39 @@ def servir_f033(nombre_seguro):
     return "Formulario no encontrado. Generalo desde el Reporte Compita.", 404
 
 
-@app.route('/reporte/<nombre_seguro>', methods=['GET'])
-def servir_reporte(nombre_seguro):
-    nombre_seguro = re.sub(r'[^a-zA-Z0-9-]', '_', nombre_seguro)
-    ruta = os.path.join(REPORTES_DIR, f"{nombre_seguro}.html")
+@app.route('/reporte/<id_reporte>', methods=['GET'])
+def servir_reporte(id_reporte):
+    # Solo se sirven reportes con nombre nuevo (con sufijo aleatorio). Los de antes llevaban
+    # el token de sesión dentro y una dirección adivinable, así que ya no se entregan.
+    if not PATRON_ID_REPORTE.match(id_reporte or ''):
+        return "Este enlace de reporte ya no está disponible. Ábrelo o prepáralo de nuevo desde Compita.", 404
+    ruta = os.path.join(REPORTES_DIR, f"{id_reporte}.html")
     if not os.path.exists(ruta):
-        return "Reporte no encontrado. Generalo desde Compita.", 404
-    return send_file(ruta, mimetype='text/html')
+        return "Reporte no encontrado. Prepáralo de nuevo desde Compita.", 404
+    respuesta = send_file(ruta, mimetype='text/html')
+    respuesta.headers['Cache-Control'] = 'no-store'
+    respuesta.headers['Referrer-Policy'] = 'no-referrer'
+    return respuesta
+
+
+@app.route('/reporte-estado/<id_reporte>', methods=['GET'])
+def estado_reporte(id_reporte):
+    # Le dice a Compita si un reporte guardado sigue disponible y si el pliego cambió
+    # después de generarlo. No llama a Claude ni gasta nada.
+    if not PATRON_ID_REPORTE.match(id_reporte or ''):
+        return jsonify({'success': True, 'existe': False})
+    ruta = os.path.join(REPORTES_DIR, f"{id_reporte}.html")
+    if not os.path.exists(ruta):
+        return jsonify({'success': True, 'existe': False})
+    fecha_reporte = os.path.getmtime(ruta)
+    referencia_segura = id_reporte.split('__e')[0]
+    fecha_pliego = ultima_fecha_pliego(referencia_segura)
+    return jsonify({
+        'success': True,
+        'existe': True,
+        'generado': datetime.fromtimestamp(fecha_reporte, ZONA_RD).isoformat(),
+        'pliego_cambio': bool(fecha_pliego and fecha_pliego > fecha_reporte),
+    })
 
 
 if __name__ == '__main__':
