@@ -29,6 +29,94 @@ CORS(app, origins=[
     "https://www.compita.do",
 ])
 
+# ============================================================================
+# PASE DE ACCESO (nov 2026)
+# ----------------------------------------------------------------------------
+# Antes, cualquiera que conociera la dirección de este servicio podía pedir
+# análisis de pliegos (cada uno cuesta dinero en Claude) sin ser cliente.
+# Ahora Compita (Vercel) entrega al navegador un "pase" firmado cuando el
+# usuario tiene el plan vigente y cupo. El pase vale 20 minutos, sirve para
+# una sola función y solo se acepta unas pocas veces (por si hay reintentos).
+#
+# Se activa definiendo la variable SERVICIO_TOKEN_SECRET en Railway con el MISMO
+# valor que en Vercel. Mientras no exista, el servicio funciona como antes
+# (así se puede desplegar sin cortar el servicio) y deja un aviso en el registro.
+# ============================================================================
+import hmac
+import hashlib
+import functools
+
+SERVICIO_TOKEN_SECRET = os.environ.get('SERVICIO_TOKEN_SECRET', '')
+MAX_USOS_POR_PASE = 6
+_usos_por_pase = {}          # jti -> [usos, expira]
+_usos_por_pase_lock = threading.Lock()
+_aviso_sin_secreto_dado = False
+
+
+def _b64url_decode(texto):
+    return base64.urlsafe_b64decode(texto + '=' * (-len(texto) % 4))
+
+
+def verificar_pase(token):
+    """Verifica un pase (JWT HS256). Devuelve (datos, error)."""
+    try:
+        encabezado_b64, datos_b64, firma_b64 = token.split('.')
+        esperada = hmac.new(SERVICIO_TOKEN_SECRET.encode('utf-8'),
+                            (encabezado_b64 + '.' + datos_b64).encode('utf-8'),
+                            hashlib.sha256).digest()
+        if not hmac.compare_digest(esperada, _b64url_decode(firma_b64)):
+            return None, 'firma inválida'
+        if json.loads(_b64url_decode(encabezado_b64)).get('alg') != 'HS256':
+            return None, 'algoritmo no permitido'
+        datos = json.loads(_b64url_decode(datos_b64))
+        if float(datos.get('exp', 0)) < time.time():
+            return None, 'vencido'
+        return datos, None
+    except Exception:
+        return None, 'formato inválido'
+
+
+def requiere_pase(permiso):
+    """Protege un endpoint: exige un pase vigente que incluya `permiso`."""
+    def decorador(funcion):
+        @functools.wraps(funcion)
+        def envoltura(*args, **kwargs):
+            global _aviso_sin_secreto_dado
+            if not SERVICIO_TOKEN_SECRET:
+                if not _aviso_sin_secreto_dado:
+                    print('AVISO: SERVICIO_TOKEN_SECRET no está definido; los endpoints funcionan SIN pase de acceso.')
+                    _aviso_sin_secreto_dado = True
+                return funcion(*args, **kwargs)
+
+            encabezado = request.headers.get('Authorization', '')
+            if not encabezado.startswith('Bearer '):
+                return jsonify({'success': False, 'error': 'Falta el pase de acceso. Recarga la página e inténtalo de nuevo.'}), 401
+            datos, error = verificar_pase(encabezado[7:].strip())
+            if error:
+                return jsonify({'success': False, 'error': 'Pase de acceso no válido (' + error + '). Recarga la página e inténtalo de nuevo.'}), 401
+            if permiso not in (datos.get('permisos') or []):
+                return jsonify({'success': False, 'error': 'Tu plan no incluye esta función.'}), 403
+
+            cuerpo = request.get_json(silent=True) or {}
+            if isinstance(cuerpo, dict) and cuerpo.get('empresa_id') is not None \
+                    and str(cuerpo.get('empresa_id')) != str(datos.get('empresa_id')):
+                return jsonify({'success': False, 'error': 'El pase no corresponde a esta empresa.'}), 403
+
+            jti = str(datos.get('jti', ''))
+            with _usos_por_pase_lock:
+                ahora = time.time()
+                if len(_usos_por_pase) > 2000:
+                    for k in [k for k, v in _usos_por_pase.items() if v[1] < ahora]:
+                        _usos_por_pase.pop(k, None)
+                registro = _usos_por_pase.setdefault(jti, [0, float(datos.get('exp', ahora))])
+                if registro[0] >= MAX_USOS_POR_PASE:
+                    return jsonify({'success': False, 'error': 'Este pase ya se usó el máximo de veces. Recarga la página.'}), 429
+                registro[0] += 1
+            return funcion(*args, **kwargs)
+        return envoltura
+    return decorador
+
+
 # Carpeta base para pliegos, F033 y reportes. Si el servicio tiene un disco permanente
 # (volume) en Railway, se usa ese disco y los archivos sobreviven a cada despliegue.
 DATOS_DIR = os.environ.get('DATOS_DIR') or os.environ.get('RAILWAY_VOLUME_MOUNT_PATH') or '/tmp'
@@ -493,6 +581,7 @@ def descargar_pliego(referencia, guardar_zip=False):
 
 
 @app.route('/descargar-pliego', methods=['POST'])
+@requiere_pase('zip')
 def endpoint_descargar_pliego():
     try:
         data = request.get_json()
@@ -569,6 +658,7 @@ def buscar_precios_referencia(titulo, descripcion):
 
 
 @app.route('/analizar-pliego', methods=['POST'])
+@requiere_pase('analisis')
 def analizar_pliego():
     try:
         data = request.get_json()
@@ -1307,6 +1397,7 @@ def llenar_f033(docx_bytes, items):
 
 
 @app.route('/agente-033', methods=['POST'])
+@requiere_pase('agente_033')
 def agente_033():
     try:
         data = request.get_json()
@@ -1660,6 +1751,7 @@ def descarga_backfill_status():
 
 
 @app.route('/organizador-oferta', methods=['POST'])
+@requiere_pase('agente_sprint')
 def organizador_oferta():
     try:
         data          = request.get_json()
@@ -2769,6 +2861,7 @@ async function generarF033Reporte(btn){{
 
 
 @app.route('/generar-reporte', methods=['POST'])
+@requiere_pase('reporte')
 def generar_reporte():
     try:
         data       = request.get_json()
